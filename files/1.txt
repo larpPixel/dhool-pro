@@ -1,0 +1,52 @@
+Chapter 1: Intro
+0:01
+1 second
+welcome to the channel guys today I'm going to bring up a scenario showing a little bit of Epic Games history with integrating thirdparty graphical Solutions as we stated in our studio
+Chapter 2: Screen Space Shadows
+0:10
+10 seconds
+documentary epic has no experience making realistic games but in 2019 Ben Studio released days gone as one of the
+0:17
+17 seconds
+first if not the first PS4 exclusive game to utilize unw engine instead of a proprietary engine the graphics produced in this
+0:25
+25 seconds
+game easily stand up against ninth generation's graphics but this is because the developers created their own optimized techniques
+0:33
+33 seconds
+outside of what epic games provided in unreal this technique was screen space Shadows this allowed them to display tons of micro detail on relatively flat
+0:43
+43 seconds
+geometry see traditional shadows re-render and redraw entire digital scenes from World light perspectives through a depth buffer called a shadow
+0:52
+52 seconds
+map sometimes floors small objects and very high poly meshes can be excluded from the shadow map drawing to save massive performance at the cost of
+1:00
+1 minute
+plausible detail but screen space information can be faster to use since objects are already rendered inside geometry buffers
+1:08
+1 minute, 8 seconds
+these Keep information like scene depth and World normal which represents the XYZ Direction a pixel is supposed to be facing that's why the developers
+1:17
+1 minute, 17 seconds
+included pre-computed depth information in the materials so the final depth buffer could take a performance shortcut in rendering this detail since texture
+1:24
+1 minute, 24 seconds
+manipulation is easier than rendering this has high poly geometry this is a perfect example of pre-computing what you can for players without sacrificing
+1:34
+1 minute, 34 seconds
+Dynamic light interaction Ben Studios released their unreal implementation code and epic has integrated with unreal since because it
+1:41
+1 minute, 41 seconds
+was too good to be ignored performance-wise but unfortunately baking depth information is not a polished workflow and unreal and the scin space Shadow Shader relies on
+Chapter 3: Conclusion
+1:49
+1 minute, 49 seconds
+temporal smearing to hide unneeded jittering artifacts but other implementation show that we should be able to convert this aspect in unreal to a TA independent
+1:58
+1 minute, 58 seconds
+version if you enjoyed this video make sure to hit that like button and subscribe to our channel for more in-depth optimization documentation and
+Chapter 4: Outro
+2:05
+2 minutes, 5 seconds
+be sure to check out our studio documentary exposing fake optimization in modern games thank you for watching and see you in the next video

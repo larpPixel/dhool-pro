@@ -1,0 +1,289 @@
+[beauty]
+  frame-start-clears                            1.408 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.986 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.777 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.339 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.381 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.578 ms (budget  0.80 ms)
+  screen-space-reflections                      0.203 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.204 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.484 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.590 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   3.977 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.248 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[depth]
+  frame-start-clears                            1.452 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.979 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.814 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.336 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.576 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.626 ms (budget  0.80 ms)
+  screen-space-reflections                      0.240 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.267 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.412 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.625 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   4.184 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.239 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[normals]
+  frame-start-clears                            1.274 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.932 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.822 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.338 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          2.001 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.623 ms (budget  0.80 ms)
+  screen-space-reflections                      0.350 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.398 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.439 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.594 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.042 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.239 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[roughness]
+  frame-start-clears                            1.369 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.951 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.833 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.340 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.616 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.588 ms (budget  0.80 ms)
+  screen-space-reflections                      0.235 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.317 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.480 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.594 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.068 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.240 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[material-id]
+  frame-start-clears                            1.361 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.944 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.827 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.369 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          2.317 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.630 ms (budget  0.80 ms)
+  screen-space-reflections                      0.265 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.292 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.433 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.590 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.073 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.244 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[shadow-mask]
+  frame-start-clears                            1.789 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.960 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.847 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.342 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.738 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.611 ms (budget  0.80 ms)
+  screen-space-reflections                      0.278 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.307 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.457 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.594 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.037 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.240 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[ambient-occlusion]
+  frame-start-clears                            1.411 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.948 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.901 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.346 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          2.203 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.709 ms (budget  0.80 ms)
+  screen-space-reflections                      0.483 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.433 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.443 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.592 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.065 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.232 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[motion-vectors]
+  frame-start-clears                            1.368 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.953 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.833 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.335 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.745 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.616 ms (budget  0.80 ms)
+  screen-space-reflections                      0.262 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.310 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.498 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.595 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.077 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.235 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[reflections]
+  frame-start-clears                            1.286 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.949 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.931 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.354 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.728 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.633 ms (budget  0.80 ms)
+  screen-space-reflections                      0.264 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.303 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.412 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.594 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.083 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.236 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[edge-stencil]
+  frame-start-clears                            1.393 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.948 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.790 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.339 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.576 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.583 ms (budget  0.80 ms)
+  screen-space-reflections                      0.226 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.249 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.462 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.590 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.043 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.237 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[overdraw]
+  frame-start-clears                            1.328 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.949 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.881 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.341 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.933 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.635 ms (budget  0.80 ms)
+  screen-space-reflections                      0.267 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.308 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.430 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.591 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.048 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.254 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[texture-count]
+  frame-start-clears                            1.335 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.973 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.801 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.336 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.542 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.628 ms (budget  0.80 ms)
+  screen-space-reflections                      0.304 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.368 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.499 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.587 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.037 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.240 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[bent-normal-occlusion]
+  frame-start-clears                            1.214 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.962 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.880 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.349 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.846 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.634 ms (budget  0.80 ms)
+  screen-space-reflections                      0.270 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.302 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.538 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.590 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.061 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.248 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[quad-utilization]
+  frame-start-clears                            1.416 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.958 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.835 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.342 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.741 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.597 ms (budget  0.80 ms)
+  screen-space-reflections                      0.250 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.297 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.433 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.592 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.049 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.234 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[shadow-casters]
+  frame-start-clears                            1.479 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.958 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.921 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.359 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.802 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.584 ms (budget  0.80 ms)
+  screen-space-reflections                      0.236 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.273 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.443 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.591 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.075 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.241 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[light-volumes]
+  frame-start-clears                            1.400 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.953 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.804 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.347 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.753 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.615 ms (budget  0.80 ms)
+  screen-space-reflections                      0.258 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.299 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.472 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.594 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.030 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.230 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+
+[history-validity]
+  frame-start-clears                            1.403 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.930 ms (budget  0.50 ms)
+  base-pass-deferred-materials                  3.828 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.333 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.775 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.586 ms (budget  0.80 ms)
+  screen-space-reflections                      0.238 ms (budget  0.70 ms)
+  software-rt-reflection-supplement             0.266 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                 7.482 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.593 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   2.299 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.238 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.018 ms (budget  0.50 ms)
+  warnings: 1
+    ShadowFloorExcluded { mesh: "ground_floor_excluded_from_shadows" }
+

@@ -1,0 +1,392 @@
+Chapter 1: Intro (The Graphics Praise is Pure Crazy)
+0:00
+People are so starred for unique gameplay and so mentally exhausted by overmoked IPs that they are literally gaslighting themselves and others into
+0:08
+8 seconds
+thinking that Clare Obscure Expedition 33 is some kind of showcase of how to use Unreal Engine 5 the right way. Clare
+0:15
+15 seconds
+Obscure E33 is not a technical masterpiece. It's your basic U5 disaster. Even with settings that are fairly optimized and based on the PS5
+0:23
+23 seconds
+performance configuration, the game can't even hit 60 fps at native 1080p on a desktop 360. But it wouldn't matter if
+0:30
+30 seconds
+it could hit 90 fps because this game is one of the ugliest games I have ever laid my eyes on. Maxing out the graphics settings drops the performance to around
+0:39
+39 seconds
+35 frames per second. But even then, shadows are noisy, inconsistent,
+0:47
+47 seconds
+and sometimes non-existent. Meanwhile, older games that look and run better can handle several shadows without issues because of caching or because their
+0:56
+56 seconds
+geometry is actually optimized. Epic TSR is the only true hardware agnostic AA option that keeps motion halfway decent, but it costs 3.5 milliseconds to run.
+1:06
+1 minute, 6 seconds
+That's seven times slower than the crisp SMA TX2 from Modic Cry Engine. And it still has a hideous fizzling problem.
+1:14
+1 minute, 14 seconds
+This game also perfectly illustrates how fundamentally broken Lumen is. It smears particles with trailing artifacts, smears light across the main character's
+1:22
+1 minute, 22 seconds
+face in unnatural ways, and loses all sense of environmental stability when anything starts moving. Heck, it can't even resolve under a still camera. And
+1:31
+1 minute, 31 seconds
+like many other games that obliterate performance with Nanite over the guise of no LOD pop and infinite detail that ends up as horrible sub pixel aliasing,
+1:39
+1 minute, 39 seconds
+users are still stuck with Unreal's incompetent LOD transitions. Then to top it all off, the devs forced an extreme sharpener to further murder image
+1:48
+1 minute, 48 seconds
+quality. Now, we've already broken down the UE5 pipeline in past videos, and we don't want to waste time repeating all that here. E33 only uses a slightly
+Chapter 2: Micro Budget Analysis & Why We Need To Discuss This
+1:56
+1 minute, 56 seconds
+newer UE5 version than Oblivion. So, for this video, we're going to focus on the key differences, specifically what the devs tried to do to squeeze slightly
+2:04
+2 minutes, 4 seconds
+better performance out of aluminum and nanite production. because what the devs did needs to be mentioned when the entire sea of content creators and
+2:11
+2 minutes, 11 seconds
+complacent blind devs are hyping this game as some kind of rayraced optimized showcase.
+2:17
+2 minutes, 17 seconds
+Then I'm also going to use this game to show how backwards and senseless Epic Games development philosophy is and why being aware of these issues can lead to
+2:25
+2 minutes, 25 seconds
+changes inside Unreal. Now let's discuss lumen first. Performance is very dependent on async compute and the developers calculate lumen at a much lower pixel resolution than recommended.
+Chapter 3: The Truth About Lumen(GI & General Ray-Tracing)
+2:36
+2 minutes, 36 seconds
+On high, it's set to 128. For reference, Unreal's high scalability usually sets this value at 32. And the epic
+2:43
+2 minutes, 43 seconds
+scalability uses 16. The lower the value, the more expensive and accurate lumen becomes. The developers also excluded all objects that were not major
+2:52
+2 minutes, 52 seconds
+occluders from the lumen scene. And as you can see, the developers use this software tracing via SDFs. Level One Text was recently spewing marketing lies
+3:01
+3 minutes, 1 second
+to pretend that Nvidia's hardware ray tracing was a good thing by using this game as an example. They were not aware that this game is actually using
+3:08
+3 minutes, 8 seconds
+software tracing, which means no hardware RT is required. Now, real quick, let's talk about their interactive stance on reflections. Now, we've stated that cube maps should be
+Chapter 4: Our Current Stance On RT reflections
+3:16
+3 minutes, 16 seconds
+replaced with ray trace reflections, but with our use case in our internal cinematography analysis, we can define a clear direction we want to push towards.
+3:25
+3 minutes, 25 seconds
+So, here's how we think the reflection should be approached. Basic world occlusion from the atmosphere is the most important part. Big chunky assets
+3:32
+3 minutes, 32 seconds
+like dumpsters, cars, buildings, and mailboxes should be represented in world space. We might be able to save performance by skipping the color evaluation of whatever portions are not
+3:41
+3 minutes, 41 seconds
+in direct lighting because directly lit portions of objects and reflections siphon the eyes attention. This is why emissive objects need world space representation even if they're small.
+3:52
+3 minutes, 52 seconds
+World space geometry needs to be simple, simpler than AC shadows approach and closer to Crisis Remastered on eighth gen consoles, but with vertex color data instead of textured geometry.
+4:03
+4 minutes, 3 seconds
+These simplified world objects should be baked into larger structures to avoid overwhelming the GPU with heavily instance-based data, but dynamic objects
+4:11
+4 minutes, 11 seconds
+like doors and cars should still retain individual structures. To save even more performance, trace at a half resolution and use screen space reflections first.
+4:20
+4 minutes, 20 seconds
+SSR of course that looks and performs as well as modded Need for Speed 2015.
+4:24
+4 minutes, 24 seconds
+Hopefully, we can trace in software so more GPUs can be supported and prevent our studio from playing into Nvidia's manipulative hardware RT market. This is the direction we want to take our game.
+4:34
+4 minutes, 34 seconds
+And because our project aligns with a common game scenario, other studios can and should adopt reflection technologies that align with what we're discussing
+Chapter 5: Geometry (More Data On Nanite, Niagara, & VSMs)
+4:42
+4 minutes, 42 seconds
+here. Now, let's discuss how this game handles geometry and Nanite. Nanite forces a full depth prepass on non-nanite geometry due to colon
+4:50
+4 minutes, 50 seconds
+dependencies. The GPU then uses mesh and compute shaders to process Nanite's cluster calling logic. That logic alone takes around 2 milliseconds. Maybe this is done in async, but that's doubtful.
+5:01
+5 minutes, 1 second
+Then Nanite software rasterizer kicks in. Writing the first batch of micropolygons at double our recommended prepass budget. Then the next objects
+5:10
+5 minutes, 10 seconds
+rasterized have noticeably more intricate materials assigned to them.
+5:14
+5 minutes, 14 seconds
+Then slow textured geometry is rasterized. The visbuffer prepass takes around 4 milliseconds. That's like rendering Ne for speed 2015's geometry
+5:23
+5 minutes, 23 seconds
+in decapass twice. And the material lighting info hasn't even been evaluated yet. In U5.4, the old tiled quad
+5:30
+5 minutes, 30 seconds
+approach is replaced with compute shaders. These don't need full screen vertices, but are slightly slower to shade by about 0.05 milliseconds. This
+5:39
+5 minutes, 39 seconds
+change was meant to fix rare bottlenecks caused from offscreen material draws. It does not optimize Nanite's material shading rate, which is where Nanite also
+5:48
+5 minutes, 48 seconds
+fails to be efficient. Even though Nanite processes materials from the visibility buffer quadlessly in the Nanite base pass, it still shades them
+5:57
+5 minutes, 57 seconds
+as if those materials were applied on objects with unoptimized quad overdraw.
+6:01
+6 minutes, 1 second
+Sandfall Interactive saved some performance by making sure the slow behavior wasn't applied to the most common material being the floor, which
+6:09
+6 minutes, 9 seconds
+often stands out as a performance killer due to their pixel surface area on the frame and overly texture blended materials. Nanite performs just slightly
+6:17
+6 minutes, 17 seconds
+better in this scene because 30% of the scene wasn't shaded with Nanite, keeping the Nanite base pass under 2 milliseconds. But remember, geometric inefficiencies get passed into shadows.
+6:28
+6 minutes, 28 seconds
+In the TS Oblivion remake, shadows were a harder problem because of a dynamic sun and horribly unoptimized assets. But in E33, shadows could have been
+6:37
+6 minutes, 37 seconds
+aggressively cached. Instead, they take two milliseconds, which is insane when games like Days Gone or HalfLife Alex
+6:44
+6 minutes, 44 seconds
+handle shadows in a third of that time and look better doing it. One of the reasons why shadows are so slow in E33 is because the developers draw the
+6:53
+6 minutes, 53 seconds
+floors and the shadow maps. Meanwhile, better looking eighth gen games excluded them entirely from the main shadow passes to save performance. And even
+7:02
+7 minutes, 2 seconds
+after taking two milliseconds, these shadows are rendered at embarrassingly low resolutions just to counteract Nanit's inefficiencies.
+7:09
+7 minutes, 9 seconds
+Unreal softens these shadows with extreme noise because Epic expects devs to mask it with blurry TA. Except, as we've discussed, hiding garbage
+7:18
+7 minutes, 18 seconds
+rendering with blurry TA doesn't actually hide garbage rendering. Now, let's quickly dismantle some common Nanite lies and defenses for its use.
+Chapter 6: The Logicless Idea of Nanite & Meshlet Systems
+7:28
+7 minutes, 28 seconds
+You don't need nanite to fix LED popping. Poppin will always exist in some other area. So no pop is a false
+7:35
+7 minutes, 35 seconds
+advantage for choosing Nanai. Developers can eliminate L & Pop using the research we've compiled on this channel using various shipped games. Nana is a stupid approach for generating detail.
+7:46
+7 minutes, 46 seconds
+Micropolygons introduce sub pixel aliasing which demands blurry TA to fix which also ends up blurring the very
+7:53
+7 minutes, 53 seconds
+detail you use Nanite for. Nanite introduces a massive cost to players under the guise of infinite detail. But
+8:00
+8 minutes
+artists and studios can't keep up with that promise. It's too memory and labor intensive to truly fulfill. And even if
+8:07
+8 minutes, 7 seconds
+they could produce such dense content, Nanite's collapse logic can fail to render objects correctly, leading to polygonal edges. Anyway, it takes a
+8:16
+8 minutes, 16 seconds
+massive amount of effort to get Nanite running semi nonh horrifically slow.
+8:21
+8 minutes, 21 seconds
+It's always the biggest chunk of rendering in games. Despite Nanite Defenders trying to throw Lumen under the bus for UE5 issues, advocating for
+8:28
+8 minutes, 28 seconds
+higher quality automated LOD generation, texture packing, and better baking workflows isn't asking for more work.
+8:35
+8 minutes, 35 seconds
+It's basic sane development practices that benefit studios and consumers. The last issue Nanite Defenders refuse to address is the massive cost of shadows when dealing with micropolygon content.
+8:46
+8 minutes, 46 seconds
+This is something we touched on in Alen Wake 2, which wasn't even targeting micropolygon geometry. With optimized LEDs and a vertex shader path, you can
+8:55
+8 minutes, 55 seconds
+easily have tons of shadowed lights in a scene with great performance and without noise. Now, let's get back to E33's rendering. This game looks extra bad
+Chapter 7: UE5 Virtual Textures (Another Rendering Abomination)
+9:04
+9 minutes, 4 seconds
+because of another TA dependent feature I forgot to mention in our first video's original montage. This graphic aspect
+9:10
+9 minutes, 10 seconds
+being textures. Yeah, not even textures are sacred at this point. Specifically, virtual textures, which UE5 uses.
+9:18
+9 minutes, 18 seconds
+Virtual textures are used to stream in smaller chunks of giant textures into VRAM. They almost always look awful because they require stochastic sampling
+9:27
+9 minutes, 27 seconds
+to blend MIP levels unless thin lines of duplicated data is present in VRAM.
+9:32
+9 minutes, 32 seconds
+We're not going too deep on virtual textures in this video, but we're open to hearing in the comment section about use cases where the non-noisy approach could be used to help performance or
+9:40
+9 minutes, 40 seconds
+visuals, but if they're implemented in the way that Unreal does it, they are worthless. UFI's virtual textures also force a full prepass. Now, some devs
+9:49
+9 minutes, 49 seconds
+claim you can't notice stochcastic texture sampling, and that disqualifies them from judging aesthetics. Yet, many of these people are leading the industry
+Chapter 8: Down to the Motion Blur, Modern Graphics Perform & Look Worse
+9:57
+9 minutes, 57 seconds
+in its shows. For instance, UE5's motion blur looks terrible. Even if we use a live console to max out its quality, it
+10:05
+10 minutes, 5 seconds
+still produces this muddy, dithered appearance, while Frostbite's motion blur is cheaper and looks far more natural.
+10:12
+10 minutes, 12 seconds
+We've given a clear vision for graphics, but 99% of studios using Unreal put all their energy and focus on the art
+10:19
+10 minutes, 19 seconds
+direction, music, story, gameplay. Yet, they completely neglect their responsibility when it relates to optimized graphics and just blindly
+10:27
+10 minutes, 27 seconds
+adopt Unreal's Fortnite driven graphics philosophy instead. But here's the thing, plugging in another company's graphics for their own project would not
+10:35
+10 minutes, 35 seconds
+be a problem if those graphics didn't look like hideous garbage like Unreal.
+10:40
+10 minutes, 40 seconds
+Epic's engineers consistently show they don't know what looks good. Brian Carris pushed Lambert over Burley because he couldn't see a difference, but thousands
+Chapter 9: Epic Games' History in Low Standards (Brian Karis)
+10:49
+10 minutes, 49 seconds
+of people can tell when they look at Frostbite games or Frostbite papers that don't use Lambert. The Lambert model is a huge part of that unreal look that
+10:57
+10 minutes, 57 seconds
+people are sick of because it's so different from realistic behavior. A person's brain is trained to not be fatigued from behavior it's exposed to
+11:05
+11 minutes, 5 seconds
+every day. And while burly diffuse is far from perfect, it's progress from Lambert. Caris displayed his low standards again when he pushed his ghosty, blurry TAA as production ready.
+11:17
+11 minutes, 17 seconds
+He showcased his blurry solution in a compressed video with Broken Bloom and SSR to make it seem like a bigger breakthrough than it actually was. Some
+11:26
+11 minutes, 26 seconds
+developers called out Epic for the misleading comparison, but no voice like Threat Interactive existed at the time.
+11:32
+11 minutes, 32 seconds
+Instead, mainstream reviewers and news outlets were calling the technique incredible. Caris's next big development would be Nanite, the first solution to
+11:40
+11 minutes, 40 seconds
+achieving one pixel per triangle, a dream the industry blindly assumed would be progress for graphics until we showed
+11:48
+11 minutes, 48 seconds
+one pixel per triangle detail causes extreme aliasing. Caris again failed to recognize that issue because he lacks the visual reasoning to do so or because
+11:57
+11 minutes, 57 seconds
+he is too busy slathering his blurry TA solution on his newest work. Gyum Abidi, the Epic Games engineer behind TSR, made
+Chapter 10: Guillaume Abadie(Low Standards In AA/Frame Comparison)
+12:05
+12 minutes, 5 seconds
+an overly expensive, blurry, flickery, and rotation insensitive upscaler and thought it would be good enough to allow inside the industry standard engine. If
+12:14
+12 minutes, 14 seconds
+he knew what looked good, he would not have pushed such a terrible solution into the industry. Daniel Wright is another Epic Games engineer in charge of
+Chapter 11: Daniel Wright (His Best Work Isn't Even Available for Devs)
+12:21
+12 minutes, 21 seconds
+Unreal's lighting development. I have less problems with his work, but while other console games were implementing GI without light maps or ray tracing, he
+12:29
+12 minutes, 29 seconds
+limited GI to landscapes and just expected console developments to throw in a basic skylight with problematic DFAO layered with a terribly incompetent
+12:37
+12 minutes, 37 seconds
+SSAO he allowed in the engine. It's not surprising that he would end up leading the development of Lumen, a horrible looking smeary, unstable TAA dependent
+12:47
+12 minutes, 47 seconds
+lighting solution. Tech reviewers have propagated the industry's low standards with videos or articles of praise because their range of satisfaction
+Chapter 12: Tech Reviewers & Mirrored Incompetency
+12:54
+12 minutes, 54 seconds
+falls within is so and so game better looking than XPS3 title. Does XG game use ray tracing? And what is our
+13:01
+13 minutes, 1 second
+interview status with said studio? These reviewers like Caris are all the same.
+13:07
+13 minutes, 7 seconds
+They cannot tell the difference between a Lambert lit mess and a more accurate lighting model, which hints at these reviewers incompetency to bring proper
+13:14
+13 minutes, 14 seconds
+accountability to the rendering mistakes graphic programmers are making. You know who else has poor standards and graphics? CDPR. They've only made one
+Chapter 13: Epic Games' False Hope (Their Work is Crap)
+13:23
+13 minutes, 23 seconds
+semi-realistic game, and it's a blurry, dithered mess that only looks decent when Nvidia's marketing tech is used.
+Chapter 14: The Atomic Epiphany Gamers & Devs Need
+13:29
+13 minutes, 29 seconds
+The Unreal Engine look is the dither Lambert diffused blue skylet garbage AO TA smeared look. The UE5 look is the
+13:38
+13 minutes, 38 seconds
+Lambert diffuse, flickery lumen, noisy nanite, broken shadow, low FPS look. U5 is not making realistic graphics more
+13:47
+13 minutes, 47 seconds
+accessible. It's making bad graphics the standard. Caris has mentioned thousands of times in rendering papers, but his work is not good enough to reference.
+13:56
+13 minutes, 56 seconds
+When you get Caris wannabes, you get games like Monster Hunter Wilds. Unreal cannot progress with leaders that seem
+14:03
+14 minutes, 3 seconds
+unable to comprehend what is needed for pleasing aesthetics, which in most scenarios is synonymous with realism.
+Chapter 15: The ONLY Solution That Can Help Gamers & Devs
+14:10
+14 minutes, 10 seconds
+So, here's a closing message. For years, gamers and developers have advocated for an alternative for Unreal Engine. They have been made and the industry doesn't
+14:18
+14 minutes, 18 seconds
+care. Games are still being made with Unreal because it's the industry standard. For years, those who have recognized the issues with Unreal have
+14:26
+14 minutes, 26 seconds
+been running away from the problem instead of trying to fix it. The only solution that has had any success in influencing the industry are custom Unreal versions, as seen with Embark
+14:35
+14 minutes, 35 seconds
+Studios in the Nvidia RTX branch. Their games are often used to unfairly defend Unreal's graphical performance by gamers and even Epic's own ignorant
+14:44
+14 minutes, 44 seconds
+programmers. Threat Interactive aims to create a new branch that overhauls the entire graphics pipeline with our own superior vision for graphics outlined by
+14:52
+14 minutes, 52 seconds
+our channel's content. Other studios have built custom graphics in Unreal, but sadly many of these studios rarely share out of the box working code for
+15:00
+15 minutes
+other studios to use. On the other hand, it's our mission to make sure our graphics development is easily accessible for other studios in the same
+15:07
+15 minutes, 7 seconds
+fashion as the Nvidia RTX branch. Our plans are clear and the intent is there, but at this point, we lack the funding to initiate such ambitious development.
+Chapter 16: Epic Games Indifference & Superficial Motivations
+15:15
+15 minutes, 15 seconds
+As wellunded as Epic is, they do not have the incentive to care about Unreal's inefficiencies when they receive millions of dollars from royalties from games that look and
+15:24
+15 minutes, 24 seconds
+perform as badly as this one does. They do not consider basic optimizations and features supported by dozens of other engines to be worth integrating in UEI5.
+15:33
+15 minutes, 33 seconds
+Epic will only focus on making sure they stay in headlines with features nobody will actually use. And the biggest reason why they won't fix the issues we
+15:41
+15 minutes, 41 seconds
+discussed as of now is because most of their graphic engineers cannot tell the difference between mediocrity and actual progress in graphics. So here's how you
+Chapter 17: How You Can Support Our Vision & Efforts
+15:50
+15 minutes, 50 seconds
+can help us. Your subscription directly raises Epic Games damage control cost and builds the market value for real optimization. Our Patreon allows viewers
+15:58
+15 minutes, 58 seconds
+to directly support these videos and our efforts while getting access to frame extracted comparison images. We're hoping with enough members, we can introduce highstake raffle prizes like
+16:06
+16 minutes, 6 seconds
+consoles and high-end PC hardware. But if you can't join our Patreon, then we greatly appreciate it if you, our viewers, could share this video three
+16:14
+16 minutes, 14 seconds
+times on any of these platforms. This will boost our YouTube revenue to keep our channel sustainable, and it also helps our message about Unreal get out there so that becomes more mainstream
+Chapter 18: "If Your New" Instructions & Thank You's To Current Supporters
+16:23
+16 minutes, 23 seconds
+knowledge. If you're new to this channel and felt confused on some graphic terminology, watch our videos in order as they slowly explain the rendering
+16:30
+16 minutes, 30 seconds
+concepts and marketing tactics used in the graphics industry. We have many videos planned out to showcase more techniques we think are good enough for
+16:37
+16 minutes, 37 seconds
+modern games, including our own. It is a time-consuming process to produce our videos. So, a big thank you to all of our viewers, subscribers, and especially
+16:44
+16 minutes, 44 seconds
+our Patreon members and those of you who have donated with super thanks. Until the next video.

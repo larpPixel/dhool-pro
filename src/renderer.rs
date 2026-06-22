@@ -1,0 +1,1096 @@
+use crate::asset::{validate_asset, AssetIssue, ShadowCasterClass};
+use crate::graph::{build_baseline_frame_graph, GraphIssue};
+use crate::math::{lerp3, saturate, Color, Vec2, Vec3, Vec4};
+use crate::perf::{
+    blue_noise_hash, edge_stencil_4x4, gt_tonemap_rgba8, kawase_blur_rgba32f, reduce_hiz_rgba16,
+};
+use crate::quality::QualityTier;
+use crate::scene::{LightKind, MaterialClass, RenderScene};
+use std::time::Instant;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugView {
+    Beauty,
+    Depth,
+    Normals,
+    Roughness,
+    MaterialId,
+    ShadowMask,
+    AmbientOcclusion,
+    MotionVectors,
+    Reflections,
+    EdgeStencil,
+    Overdraw,
+    TextureCount,
+    BentNormalOcclusion,
+    QuadUtilization,
+    ShadowCasters,
+    LightVolumes,
+    HistoryValidity,
+}
+
+impl DebugView {
+    pub const ALL: [Self; 17] = [
+        Self::Beauty,
+        Self::Depth,
+        Self::Normals,
+        Self::Roughness,
+        Self::MaterialId,
+        Self::ShadowMask,
+        Self::AmbientOcclusion,
+        Self::MotionVectors,
+        Self::Reflections,
+        Self::EdgeStencil,
+        Self::Overdraw,
+        Self::TextureCount,
+        Self::BentNormalOcclusion,
+        Self::QuadUtilization,
+        Self::ShadowCasters,
+        Self::LightVolumes,
+        Self::HistoryValidity,
+    ];
+
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Beauty => "beauty",
+            Self::Depth => "depth",
+            Self::Normals => "normals",
+            Self::Roughness => "roughness",
+            Self::MaterialId => "material-id",
+            Self::ShadowMask => "shadow-mask",
+            Self::AmbientOcclusion => "ambient-occlusion",
+            Self::MotionVectors => "motion-vectors",
+            Self::Reflections => "reflections",
+            Self::EdgeStencil => "edge-stencil",
+            Self::Overdraw => "overdraw",
+            Self::TextureCount => "texture-count",
+            Self::BentNormalOcclusion => "bent-normal-occlusion",
+            Self::QuadUtilization => "quad-utilization",
+            Self::ShadowCasters => "shadow-casters",
+            Self::LightVolumes => "light-volumes",
+            Self::HistoryValidity => "history-validity",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderPath {
+    Deferred,
+    ForwardPlus,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderConfig {
+    pub width: u32,
+    pub height: u32,
+    pub quality: QualityTier,
+    pub path: RenderPath,
+    pub debug_view: DebugView,
+    pub exposure: f32,
+    pub frame_index: u32,
+    pub enable_software_rt: bool,
+    pub enable_ssr: bool,
+    pub enable_fog: bool,
+    pub enable_bloom: bool,
+    pub enable_persistence: bool,
+}
+
+impl RenderConfig {
+    pub fn headless_1080p() -> Self {
+        Self {
+            width: 1920,
+            height: 1080,
+            quality: QualityTier::High,
+            path: RenderPath::Deferred,
+            debug_view: DebugView::Beauty,
+            exposure: 1.0,
+            frame_index: 0,
+            enable_software_rt: true,
+            enable_ssr: true,
+            enable_fog: true,
+            enable_bloom: true,
+            enable_persistence: true,
+        }
+    }
+
+    pub fn tiny_test() -> Self {
+        Self {
+            width: 96,
+            height: 64,
+            exposure: 1.0,
+            ..Self::headless_1080p()
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PassReport {
+    pub name: &'static str,
+    pub budget_ms: f32,
+    pub cpu_ms: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RenderWarning {
+    Asset(AssetIssue),
+    Graph(GraphIssue),
+    SsrCostExceededSoftwareRt {
+        ssr_ms: f32,
+        software_rt_ms: f32,
+    },
+    DrawTextureLimit {
+        mesh: String,
+        texture_count: usize,
+        limit: usize,
+    },
+    ShadowFloorExcluded {
+        mesh: String,
+    },
+    OverwrittenExpensiveMaterialArea {
+        ratio: f32,
+    },
+    EmptySmaaEdges,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RenderError {
+    InvalidDimensions,
+    MissingMaterial { mesh: String, material_index: usize },
+    KernelFailure,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderOutput {
+    pub width: u32,
+    pub height: u32,
+    pub color: Vec<[u8; 4]>,
+    pub hdr: Vec<[f32; 4]>,
+    pub pass_reports: Vec<PassReport>,
+    pub warnings: Vec<RenderWarning>,
+    pub graph_passes: usize,
+    pub graph_resources: usize,
+}
+
+impl RenderOutput {
+    pub fn ppm_bytes(&self) -> Vec<u8> {
+        let mut bytes = format!("P6\n{} {}\n255\n", self.width, self.height).into_bytes();
+        bytes.reserve(self.color.len() * 3);
+        for px in &self.color {
+            bytes.extend_from_slice(&px[..3]);
+        }
+        bytes
+    }
+
+    pub fn average_luminance(&self) -> f32 {
+        if self.hdr.is_empty() {
+            return 0.0;
+        }
+        let sum: f32 = self
+            .hdr
+            .iter()
+            .map(|p| p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722)
+            .sum();
+        sum / self.hdr.len() as f32
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GPixel {
+    covered: bool,
+    material_index: usize,
+    material_id: u8,
+    albedo: Color,
+    normal: Vec3,
+    world: Vec3,
+    roughness: f32,
+    specular: f32,
+    cavity: f32,
+    velocity: Vec2,
+    texture_count: usize,
+    glass: bool,
+    emissive: bool,
+    shadow_class: ShadowCasterClass,
+}
+
+impl Default for GPixel {
+    fn default() -> Self {
+        Self {
+            covered: false,
+            material_index: 0,
+            material_id: 0,
+            albedo: Color::BLACK,
+            normal: Vec3::Y,
+            world: Vec3::ZERO,
+            roughness: 1.0,
+            specular: 0.0,
+            cavity: 1.0,
+            velocity: Vec2::ZERO,
+            texture_count: 0,
+            glass: false,
+            emissive: false,
+            shadow_class: ShadowCasterClass::None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FrameBuffers {
+    depth: Vec<f32>,
+    gbuffer: Vec<GPixel>,
+    overdraw: Vec<u16>,
+    shadow_mask: Vec<f32>,
+    ao: Vec<f32>,
+    reflections: Vec<Color>,
+    lighting: Vec<[f32; 4]>,
+    edges: Vec<u8>,
+}
+
+impl FrameBuffers {
+    fn new(pixels: usize) -> Self {
+        Self {
+            depth: vec![1.0; pixels],
+            gbuffer: vec![GPixel::default(); pixels],
+            overdraw: vec![0; pixels],
+            shadow_mask: vec![1.0; pixels],
+            ao: vec![1.0; pixels],
+            reflections: vec![Color::BLACK; pixels],
+            lighting: vec![[0.0; 4]; pixels],
+            edges: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScreenVertex {
+    x: f32,
+    y: f32,
+    depth: f32,
+    world: Vec3,
+    normal: Vec3,
+    color: Color,
+    uv: Vec2,
+}
+
+pub struct CpuRenderer {
+    pub config: RenderConfig,
+    history: Vec<[f32; 4]>,
+}
+
+impl CpuRenderer {
+    pub fn new(config: RenderConfig) -> Self {
+        Self {
+            config,
+            history: Vec::new(),
+        }
+    }
+
+    pub fn render(&mut self, scene: &RenderScene) -> Result<RenderOutput, RenderError> {
+        if self.config.width == 0 || self.config.height == 0 {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let pixels = (self.config.width as usize)
+            .checked_mul(self.config.height as usize)
+            .ok_or(RenderError::InvalidDimensions)?;
+        let mut buffers = FrameBuffers::new(pixels);
+        let mut reports = Vec::new();
+        let mut warnings = self.validate_inputs(scene);
+        let graph = build_baseline_frame_graph();
+        warnings.extend(graph.validate().into_iter().map(RenderWarning::Graph));
+
+        Self::run_pass(&mut reports, "frame-start-clears", 0.1, || {
+            buffers.depth.fill(1.0);
+            buffers.gbuffer.fill(GPixel::default());
+            buffers.shadow_mask.fill(1.0);
+            buffers.ao.fill(1.0);
+            buffers.reflections.fill(Color::BLACK);
+            buffers.lighting.fill([0.0; 4]);
+            buffers.overdraw.fill(0);
+            Ok(())
+        })?;
+
+        Self::run_pass(&mut reports, "partial-depth-prepass", 0.5, || {
+            self.raster_scene(scene, &mut buffers, true)?;
+            Ok(())
+        })?;
+
+        Self::run_pass(&mut reports, "base-pass-deferred-materials", 3.0, || {
+            self.raster_scene(scene, &mut buffers, false)
+        })?;
+
+        Self::run_pass(&mut reports, "depth-copy-and-hiz", 0.3, || {
+            let _ = reduce_hiz_rgba16(&buffers.depth, self.config.width, self.config.height)
+                .map_err(|_| RenderError::KernelFailure)?;
+            Ok(())
+        })?;
+
+        Self::run_pass(
+            &mut reports,
+            "stencil-restricted-shadow-projection",
+            1.0,
+            || {
+                self.compute_shadow_mask(scene, &mut buffers, &mut warnings);
+                Ok(())
+            },
+        )?;
+
+        Self::run_pass(&mut reports, "multi-scale-ao-contact-shadows", 0.8, || {
+            self.compute_ao_contact(scene, &mut buffers);
+            Ok(())
+        })?;
+
+        let start = Instant::now();
+        self.compute_reflections(scene, &mut buffers, true);
+        let ssr_ms = start.elapsed().as_secs_f32() * 1000.0;
+        reports.push(PassReport {
+            name: "screen-space-reflections",
+            budget_ms: 0.7,
+            cpu_ms: ssr_ms,
+        });
+        let start = Instant::now();
+        self.compute_reflections(scene, &mut buffers, false);
+        let software_rt_ms = start.elapsed().as_secs_f32() * 1000.0;
+        reports.push(PassReport {
+            name: "software-rt-reflection-supplement",
+            budget_ms: 1.3,
+            cpu_ms: software_rt_ms,
+        });
+        if ssr_ms > software_rt_ms * 1.2 && software_rt_ms > 0.0 {
+            warnings.push(RenderWarning::SsrCostExceededSoftwareRt {
+                ssr_ms,
+                software_rt_ms,
+            });
+        }
+
+        Self::run_pass(&mut reports, "albedo-free-deferred-lighting", 1.5, || {
+            self.compute_lighting(scene, &mut buffers);
+            Ok(())
+        })?;
+
+        Self::run_pass(&mut reports, "blue-noise-volumetric-fog", 1.0, || {
+            if self.config.enable_fog {
+                self.apply_fog(scene, &mut buffers);
+            }
+            Ok(())
+        })?;
+
+        Self::run_pass(&mut reports, "kawase-bloom-and-gt-tonemap", 1.0, || {
+            if self.config.enable_bloom {
+                self.apply_bloom(&mut buffers)?;
+            }
+            if self.config.enable_persistence {
+                self.apply_persistence(&mut buffers.lighting);
+            }
+            Ok(())
+        })?;
+
+        let mut color = gt_tonemap_rgba8(&buffers.lighting, self.config.exposure)
+            .map_err(|_| RenderError::KernelFailure)?;
+
+        Self::run_pass(&mut reports, "smaa-compute-edge-detect", 0.5, || {
+            buffers.edges =
+                edge_stencil_4x4(&buffers.depth, self.config.width, self.config.height, 0.003)
+                    .map_err(|_| RenderError::KernelFailure)?;
+            if !buffers.edges.iter().any(|&e| e != 0) {
+                warnings.push(RenderWarning::EmptySmaaEdges);
+            }
+            Ok(())
+        })?;
+
+        Self::run_pass(&mut reports, "smaa-persistence-resolve", 0.5, || {
+            self.apply_smaa(&buffers, &mut color);
+            Ok(())
+        })?;
+
+        color = self.debug_or_beauty(scene, &buffers, color)?;
+        self.history = buffers.lighting.clone();
+
+        Ok(RenderOutput {
+            width: self.config.width,
+            height: self.config.height,
+            color,
+            hdr: buffers.lighting,
+            pass_reports: reports,
+            warnings,
+            graph_passes: graph.pass_count(),
+            graph_resources: graph.resource_count(),
+        })
+    }
+
+    fn run_pass<T>(
+        reports: &mut Vec<PassReport>,
+        name: &'static str,
+        budget_ms: f32,
+        pass: impl FnOnce() -> Result<T, RenderError>,
+    ) -> Result<T, RenderError> {
+        let start = Instant::now();
+        let result = pass();
+        reports.push(PassReport {
+            name,
+            budget_ms,
+            cpu_ms: start.elapsed().as_secs_f32() * 1000.0,
+        });
+        result
+    }
+
+    fn validate_inputs(&self, scene: &RenderScene) -> Vec<RenderWarning> {
+        let (materials, meshes) = scene.asset_descriptors();
+        let mut warnings: Vec<_> = validate_asset(&materials, &meshes, self.config.quality)
+            .into_iter()
+            .map(RenderWarning::Asset)
+            .collect();
+        for mesh in &scene.meshes {
+            if mesh.is_floor_or_ground && mesh.shadow_class == ShadowCasterClass::None {
+                warnings.push(RenderWarning::ShadowFloorExcluded {
+                    mesh: mesh.name.clone(),
+                });
+            }
+            if let Some(material) = scene.materials.get(mesh.material_index) {
+                let limit = self.config.quality.material_texture_limit();
+                if material.texture_sample_count > limit {
+                    warnings.push(RenderWarning::DrawTextureLimit {
+                        mesh: mesh.name.clone(),
+                        texture_count: material.texture_sample_count,
+                        limit,
+                    });
+                }
+            }
+        }
+        warnings
+    }
+
+    fn raster_scene(
+        &self,
+        scene: &RenderScene,
+        buffers: &mut FrameBuffers,
+        depth_only: bool,
+    ) -> Result<(), RenderError> {
+        let mut draw_order: Vec<usize> = (0..scene.meshes.len()).collect();
+        draw_order.sort_by_key(|&i| scene.meshes[i].prepass_eligible);
+        if depth_only {
+            draw_order.retain(|&i| {
+                let mesh = &scene.meshes[i];
+                let Some(material) = scene.materials.get(mesh.material_index) else {
+                    return false;
+                };
+                mesh.prepass_eligible && !material.flags.alpha_tested
+            });
+        }
+
+        for mesh_index in draw_order {
+            let mesh = &scene.meshes[mesh_index];
+            let material = scene.materials.get(mesh.material_index).ok_or_else(|| {
+                RenderError::MissingMaterial {
+                    mesh: mesh.name.clone(),
+                    material_index: mesh.material_index,
+                }
+            })?;
+            if !depth_only && material.flags.alpha_tested && mesh.prepass_eligible {
+                continue;
+            }
+            for tri in &mesh.indices {
+                let v0 = mesh.vertices[tri[0] as usize];
+                let v1 = mesh.vertices[tri[1] as usize];
+                let v2 = mesh.vertices[tri[2] as usize];
+                if let Some(screen) = self.project_triangle(scene, mesh.transform, [v0, v1, v2]) {
+                    self.raster_triangle(
+                        &screen,
+                        mesh.material_index,
+                        mesh.shadow_class,
+                        scene,
+                        buffers,
+                        depth_only,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn project_triangle(
+        &self,
+        scene: &RenderScene,
+        model: crate::math::Mat4,
+        vertices: [crate::scene::Vertex; 3],
+    ) -> Option<[ScreenVertex; 3]> {
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        let vp = scene.camera.view_projection(aspect);
+        let mut out = [ScreenVertex {
+            x: 0.0,
+            y: 0.0,
+            depth: 1.0,
+            world: Vec3::ZERO,
+            normal: Vec3::Y,
+            color: Color::WHITE,
+            uv: Vec2::ZERO,
+        }; 3];
+
+        for (i, vertex) in vertices.iter().enumerate() {
+            let world4 = model.mul_vec4(Vec4::new(
+                vertex.position.x,
+                vertex.position.y,
+                vertex.position.z,
+                1.0,
+            ));
+            let clip = vp.mul_vec4(world4);
+            if clip.w <= 1.0e-5 {
+                return None;
+            }
+            let inv_w = 1.0 / clip.w;
+            let ndc = Vec3::new(clip.x * inv_w, clip.y * inv_w, clip.z * inv_w);
+            let n4 = model.mul_vec4(Vec4::new(
+                vertex.normal.x,
+                vertex.normal.y,
+                vertex.normal.z,
+                0.0,
+            ));
+            out[i] = ScreenVertex {
+                x: (ndc.x * 0.5 + 0.5) * (self.config.width - 1) as f32,
+                y: (1.0 - (ndc.y * 0.5 + 0.5)) * (self.config.height - 1) as f32,
+                depth: saturate(ndc.z),
+                world: world4.xyz(),
+                normal: n4.xyz().normalize_or_zero(),
+                color: vertex.color,
+                uv: vertex.uv,
+            };
+        }
+        Some(out)
+    }
+
+    fn raster_triangle(
+        &self,
+        tri: &[ScreenVertex; 3],
+        material_index: usize,
+        shadow_class: ShadowCasterClass,
+        scene: &RenderScene,
+        buffers: &mut FrameBuffers,
+        depth_only: bool,
+    ) {
+        let min_x = tri
+            .iter()
+            .map(|v| v.x)
+            .fold(f32::INFINITY, f32::min)
+            .floor()
+            .max(0.0) as u32;
+        let max_x = tri
+            .iter()
+            .map(|v| v.x)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil()
+            .min((self.config.width - 1) as f32) as u32;
+        let min_y = tri
+            .iter()
+            .map(|v| v.y)
+            .fold(f32::INFINITY, f32::min)
+            .floor()
+            .max(0.0) as u32;
+        let max_y = tri
+            .iter()
+            .map(|v| v.y)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil()
+            .min((self.config.height - 1) as f32) as u32;
+        let area = edge(tri[0].x, tri[0].y, tri[1].x, tri[1].y, tri[2].x, tri[2].y);
+        if area.abs() < 1.0e-5 {
+            return;
+        }
+        let material = &scene.materials[material_index];
+
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let w0 = edge(tri[1].x, tri[1].y, tri[2].x, tri[2].y, px, py) / area;
+                let w1 = edge(tri[2].x, tri[2].y, tri[0].x, tri[0].y, px, py) / area;
+                let w2 = 1.0 - w0 - w1;
+                if w0 < -0.0001 || w1 < -0.0001 || w2 < -0.0001 {
+                    continue;
+                }
+                let idx = self.index(x, y);
+                let depth = w0 * tri[0].depth + w1 * tri[1].depth + w2 * tri[2].depth;
+                if depth > buffers.depth[idx] + 0.0001 {
+                    continue;
+                }
+                if !depth_only {
+                    buffers.overdraw[idx] = buffers.overdraw[idx].saturating_add(1);
+                }
+                buffers.depth[idx] = depth;
+                if depth_only {
+                    continue;
+                }
+                let normal = (tri[0].normal * w0 + tri[1].normal * w1 + tri[2].normal * w2)
+                    .normalize_or_zero();
+                let world = tri[0].world * w0 + tri[1].world * w1 + tri[2].world * w2;
+                let vertex_color = tri[0].color * w0 + tri[1].color * w1 + tri[2].color * w2;
+                let uv = tri[0].uv * w0 + tri[1].uv * w1 + tri[2].uv * w2;
+                let texture_color = material
+                    .base_color_texture
+                    .as_ref()
+                    .map(|texture| texture.sample_repeat(uv))
+                    .unwrap_or(Color::WHITE);
+                let pbr = material
+                    .pbr_texture
+                    .as_ref()
+                    .map(|texture| texture.sample_repeat(uv))
+                    .unwrap_or(Color::new(1.0, 1.0, 1.0, 1.0));
+                buffers.gbuffer[idx] = GPixel {
+                    covered: true,
+                    material_index,
+                    material_id: material.material_id,
+                    albedo: material.base_color * vertex_color * texture_color,
+                    normal,
+                    world,
+                    roughness: material.roughness * pbr.g,
+                    specular: material.specular_intensity,
+                    cavity: material.cavity * pbr.r,
+                    velocity: Vec2::ZERO,
+                    texture_count: material.texture_sample_count,
+                    glass: material.flags.glass,
+                    emissive: material.flags.emissive,
+                    shadow_class,
+                };
+            }
+        }
+    }
+
+    fn compute_shadow_mask(
+        &self,
+        scene: &RenderScene,
+        buffers: &mut FrameBuffers,
+        warnings: &mut Vec<RenderWarning>,
+    ) {
+        for (idx, pixel) in buffers.gbuffer.iter().enumerate() {
+            if !pixel.covered {
+                continue;
+            }
+            let mut shadow = 1.0;
+            if pixel.world.y < -0.72 {
+                for mesh in &scene.meshes {
+                    if mesh.is_floor_or_ground || mesh.shadow_class == ShadowCasterClass::None {
+                        continue;
+                    }
+                    let center = mesh.transform.mul_vec4(Vec4::new(0.0, 0.0, 0.0, 1.0)).xyz();
+                    let dx = (pixel.world.x - center.x).abs();
+                    let dz = (pixel.world.z - center.z).abs();
+                    if dx < 0.65 && dz < 0.35 {
+                        shadow *= 0.58;
+                    }
+                }
+            }
+            buffers.shadow_mask[idx] = shadow;
+        }
+
+        let expensive = buffers
+            .gbuffer
+            .iter()
+            .zip(&buffers.overdraw)
+            .filter(|(g, overdraw)| g.covered && g.texture_count >= 4 && **overdraw > 1)
+            .count();
+        let covered = buffers
+            .gbuffer
+            .iter()
+            .filter(|g| g.covered && g.texture_count >= 4)
+            .count()
+            .max(1);
+        let ratio = expensive as f32 / covered as f32;
+        if ratio > 0.15 {
+            warnings.push(RenderWarning::OverwrittenExpensiveMaterialArea { ratio });
+        }
+    }
+
+    fn compute_ao_contact(&self, scene: &RenderScene, buffers: &mut FrameBuffers) {
+        let width = self.config.width as i32;
+        let height = self.config.height as i32;
+        for y in 0..height {
+            for x in 0..width {
+                let idx = self.index(x as u32, y as u32);
+                if !buffers.gbuffer[idx].covered {
+                    continue;
+                }
+                let z = buffers.depth[idx];
+                let mut hits = 0;
+                let mut total = 0;
+                for (ox, oy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-2, 1), (2, -1)] {
+                    let sx = x + ox;
+                    let sy = y + oy;
+                    if sx < 0 || sy < 0 || sx >= width || sy >= height {
+                        continue;
+                    }
+                    total += 1;
+                    let nz = buffers.depth[self.index(sx as u32, sy as u32)];
+                    if nz < z - 0.015 {
+                        hits += 1;
+                    }
+                }
+                let mut ao = 1.0 - hits as f32 / total.max(1) as f32 * 0.45;
+                let material = &scene.materials[buffers.gbuffer[idx].material_index];
+                if material.flags.receives_contact_shadows && buffers.gbuffer[idx].world.y < -0.65 {
+                    ao *= 0.9;
+                }
+                buffers.ao[idx] = ao * buffers.gbuffer[idx].cavity;
+            }
+        }
+    }
+
+    fn compute_reflections(&self, scene: &RenderScene, buffers: &mut FrameBuffers, ssr: bool) {
+        if ssr && !self.config.enable_ssr {
+            return;
+        }
+        if !ssr && !self.config.enable_software_rt {
+            return;
+        }
+        let width = self.config.width;
+        if ssr {
+            for y in (0..self.config.height).step_by(2) {
+                for x in (0..width).step_by(2) {
+                    let mirror_x = width - 1 - x;
+                    let sample = self.index(mirror_x, y);
+                    if !buffers.gbuffer[sample].covered {
+                        continue;
+                    }
+                    let source = buffers.gbuffer[sample].albedo;
+                    for oy in 0..2 {
+                        for ox in 0..2 {
+                            let target_x = x + ox;
+                            let target_y = y + oy;
+                            if target_x >= width || target_y >= self.config.height {
+                                continue;
+                            }
+                            let target = self.index(target_x, target_y);
+                            let g = buffers.gbuffer[target];
+                            if g.covered && (g.roughness <= 0.55 || g.glass) {
+                                buffers.reflections[target] = source * (1.0 - g.roughness) * 0.45;
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        for y in 0..self.config.height {
+            for x in 0..width {
+                let idx = self.index(x, y);
+                let g = buffers.gbuffer[idx];
+                if !g.covered || (g.roughness > 0.55 && !g.glass) {
+                    continue;
+                }
+                if buffers.reflections[idx].luminance() < 0.001 {
+                    let noise = (blue_noise_hash(x, y, self.config.frame_index, 0xA53C_91E9) & 255)
+                        as f32
+                        / 255.0;
+                    let sky = scene.sky_color * (0.35 + noise * 0.05);
+                    let emissive = scene
+                        .materials
+                        .iter()
+                        .filter(|m| m.flags.emissive)
+                        .fold(Color::BLACK, |acc, m| acc + m.emission * 0.12);
+                    let glass_line = if g.glass && x % 2 == 0 { 1.25 } else { 1.0 };
+                    buffers.reflections[idx] = (sky + emissive) * (1.0 - g.roughness) * glass_line;
+                }
+            }
+        }
+    }
+
+    fn compute_lighting(&self, scene: &RenderScene, buffers: &mut FrameBuffers) {
+        for idx in 0..buffers.gbuffer.len() {
+            let g = buffers.gbuffer[idx];
+            if !g.covered {
+                buffers.lighting[idx] =
+                    [scene.sky_color.r, scene.sky_color.g, scene.sky_color.b, 1.0];
+                continue;
+            }
+            let material = &scene.materials[g.material_index];
+            let view = (scene.camera.position - g.world).normalize_or_zero();
+            let mut diffuse_irradiance =
+                scene.ambient_color.to_vec3() * (0.6 + 0.4 * g.normal.y.max(0.0));
+            let mut specular = Vec3::ZERO;
+
+            for light in &scene.lights {
+                let (l, attenuation) = match light.kind {
+                    LightKind::Directional { direction } => ((-direction).normalize_or_zero(), 1.0),
+                    LightKind::Local { position, radius } => {
+                        let to_light = position - g.world;
+                        let dist = to_light.length();
+                        if dist >= radius {
+                            continue;
+                        }
+                        let a = 1.0 - dist / radius;
+                        (to_light / dist.max(1.0e-4), a * a)
+                    }
+                };
+                let ndotl = g.normal.dot(l).max(0.0);
+                if ndotl <= 0.0 {
+                    continue;
+                }
+                let shadow = if light.casts_shadow {
+                    buffers.shadow_mask[idx]
+                } else {
+                    1.0
+                };
+                let light_rgb = light.color.to_vec3() * (light.intensity * attenuation * shadow);
+                let burley = ndotl * (0.65 + 0.35 * g.roughness);
+                diffuse_irradiance += light_rgb * burley;
+
+                let h = (l + view).normalize_or_zero();
+                let ndoth = g.normal.dot(h).max(0.0);
+                let gloss = (1.0 - g.roughness).max(0.02);
+                let power = 2.0 + gloss * gloss * 126.0;
+                let fresnel = schlick_fresnel(view.dot(h).max(0.0), material.class);
+                specular += light_rgb * (ndoth.powf(power) * g.specular * shadow) * fresnel;
+            }
+
+            let ao = buffers.ao[idx];
+            let albedo = g.albedo.to_vec3();
+            let mut rgb = diffuse_irradiance * albedo * ao;
+            rgb += specular * (0.45 + 0.55 * ao);
+            rgb += buffers.reflections[idx].to_vec3() * (g.specular * (1.0 - g.roughness));
+            if g.emissive {
+                rgb += material.emission.to_vec3();
+            }
+            let luminance = rgb.x * 0.2126 + rgb.y * 0.7152 + rgb.z * 0.0722;
+            buffers.lighting[idx] = [rgb.x, rgb.y, rgb.z, luminance];
+        }
+    }
+
+    fn apply_fog(&self, scene: &RenderScene, buffers: &mut FrameBuffers) {
+        for y in 0..self.config.height {
+            for x in 0..self.config.width {
+                let idx = self.index(x, y);
+                let depth = buffers.depth[idx];
+                if depth >= 1.0 {
+                    continue;
+                }
+                let noise = (blue_noise_hash(x, y, self.config.frame_index, 0xF06B_100D) & 255)
+                    as f32
+                    / 255.0;
+                let fog = saturate(depth * depth * 0.45 + noise * 0.015);
+                let fog_rgb = scene.sky_color.to_vec3() * 0.75;
+                buffers.lighting[idx][0] = buffers.lighting[idx][0] * (1.0 - fog) + fog_rgb.x * fog;
+                buffers.lighting[idx][1] = buffers.lighting[idx][1] * (1.0 - fog) + fog_rgb.y * fog;
+                buffers.lighting[idx][2] = buffers.lighting[idx][2] * (1.0 - fog) + fog_rgb.z * fog;
+            }
+        }
+    }
+
+    fn apply_bloom(&self, buffers: &mut FrameBuffers) -> Result<(), RenderError> {
+        let thresholded: Vec<[f32; 4]> = buffers
+            .lighting
+            .iter()
+            .map(|p| {
+                let l = p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722;
+                if l > 1.0 {
+                    [p[0] - 1.0, p[1] - 1.0, p[2] - 1.0, 1.0]
+                } else {
+                    [0.0; 4]
+                }
+            })
+            .collect();
+        let blurred = kawase_blur_rgba32f(&thresholded, self.config.width, self.config.height, 2)
+            .map_err(|_| RenderError::KernelFailure)?;
+        for (dst, bloom) in buffers.lighting.iter_mut().zip(blurred) {
+            dst[0] += bloom[0] * 0.22;
+            dst[1] += bloom[1] * 0.22;
+            dst[2] += bloom[2] * 0.22;
+        }
+        Ok(())
+    }
+
+    fn apply_smaa(&self, buffers: &FrameBuffers, color: &mut [[u8; 4]]) {
+        let tiles_w = self.config.width.div_ceil(4);
+        for (tile_idx, edge) in buffers.edges.iter().enumerate() {
+            if *edge == 0 {
+                continue;
+            }
+            let tx = tile_idx as u32 % tiles_w;
+            let ty = tile_idx as u32 / tiles_w;
+            for oy in 0..4 {
+                for ox in 0..4 {
+                    let x = tx * 4 + ox;
+                    let y = ty * 4 + oy;
+                    if x + 1 >= self.config.width || y + 1 >= self.config.height {
+                        continue;
+                    }
+                    let idx = self.index(x, y);
+                    let right = self.index(x + 1, y);
+                    let down = self.index(x, y + 1);
+                    let right_pixel = color[right];
+                    let down_pixel = color[down];
+                    for (channel, value) in color[idx][..3].iter_mut().enumerate() {
+                        *value = ((*value as u16 * 2
+                            + right_pixel[channel] as u16
+                            + down_pixel[channel] as u16)
+                            / 4) as u8;
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_persistence(&self, lighting: &mut [[f32; 4]]) {
+        if self.history.len() != lighting.len() {
+            return;
+        }
+        for (dst, prev) in lighting.iter_mut().zip(&self.history) {
+            let delta = (dst[3] - prev[3]).abs();
+            if delta < 0.2 {
+                dst[0] = dst[0] * 0.75 + prev[0] * 0.25;
+                dst[1] = dst[1] * 0.75 + prev[1] * 0.25;
+                dst[2] = dst[2] * 0.75 + prev[2] * 0.25;
+            }
+        }
+    }
+
+    fn debug_or_beauty(
+        &self,
+        scene: &RenderScene,
+        buffers: &FrameBuffers,
+        beauty: Vec<[u8; 4]>,
+    ) -> Result<Vec<[u8; 4]>, RenderError> {
+        if self.config.debug_view == DebugView::Beauty {
+            return Ok(beauty);
+        }
+        let mut out = vec![[0, 0, 0, 255]; buffers.gbuffer.len()];
+        for y in 0..self.config.height {
+            for x in 0..self.config.width {
+                let idx = self.index(x, y);
+                let g = buffers.gbuffer[idx];
+                let color = match self.config.debug_view {
+                    DebugView::Beauty => unreachable!(),
+                    DebugView::Depth => Color::rgb(
+                        1.0 - buffers.depth[idx],
+                        1.0 - buffers.depth[idx],
+                        1.0 - buffers.depth[idx],
+                    ),
+                    DebugView::Normals => Color::rgb(
+                        g.normal.x * 0.5 + 0.5,
+                        g.normal.y * 0.5 + 0.5,
+                        g.normal.z * 0.5 + 0.5,
+                    ),
+                    DebugView::Roughness => Color::rgb(g.roughness, g.roughness, g.roughness),
+                    DebugView::MaterialId => material_id_color(g.material_id),
+                    DebugView::ShadowMask => Color::rgb(
+                        buffers.shadow_mask[idx],
+                        buffers.shadow_mask[idx],
+                        buffers.shadow_mask[idx],
+                    ),
+                    DebugView::AmbientOcclusion => {
+                        Color::rgb(buffers.ao[idx], buffers.ao[idx], buffers.ao[idx])
+                    }
+                    DebugView::MotionVectors => Color::rgb(
+                        g.velocity.x.abs().min(1.0),
+                        g.velocity.y.abs().min(1.0),
+                        0.0,
+                    ),
+                    DebugView::Reflections => buffers.reflections[idx],
+                    DebugView::EdgeStencil => {
+                        let tiles_w = self.config.width.div_ceil(4);
+                        let tile = (y / 4) * tiles_w + x / 4;
+                        let edge = buffers
+                            .edges
+                            .get(tile as usize)
+                            .copied()
+                            .unwrap_or_default() as f32;
+                        Color::rgb(edge, edge, edge)
+                    }
+                    DebugView::Overdraw => {
+                        let v = (buffers.overdraw[idx] as f32 / 4.0).min(1.0);
+                        Color::rgb(v, 0.1, 1.0 - v)
+                    }
+                    DebugView::TextureCount => {
+                        let v = g.texture_count as f32
+                            / scene
+                                .materials
+                                .get(g.material_index)
+                                .map(|_| 4.0)
+                                .unwrap_or(4.0);
+                        Color::rgb(v.min(1.0), (1.0 - v).max(0.0), 0.0)
+                    }
+                    DebugView::BentNormalOcclusion => Color::rgb(
+                        (g.normal.x * 0.5 + 0.5) * buffers.ao[idx],
+                        (g.normal.y * 0.5 + 0.5) * buffers.ao[idx],
+                        (g.normal.z * 0.5 + 0.5) * buffers.ao[idx],
+                    ),
+                    DebugView::QuadUtilization => {
+                        let tiles_w = self.config.width.div_ceil(4);
+                        let tile = (y / 4) * tiles_w + x / 4;
+                        let edge = buffers
+                            .edges
+                            .get(tile as usize)
+                            .copied()
+                            .unwrap_or_default()
+                            != 0;
+                        if edge {
+                            Color::rgb(1.0, 0.18, 0.05)
+                        } else if g.covered {
+                            Color::rgb(0.05, 0.75, 0.25)
+                        } else {
+                            Color::BLACK
+                        }
+                    }
+                    DebugView::ShadowCasters => match g.shadow_class {
+                        ShadowCasterClass::None => Color::rgb(0.12, 0.12, 0.12),
+                        ShadowCasterClass::Main => Color::rgb(0.95, 0.25, 0.1),
+                        ShadowCasterClass::ContactOnly => Color::rgb(1.0, 0.8, 0.1),
+                        ShadowCasterClass::DistantOnly => Color::rgb(0.2, 0.5, 1.0),
+                        ShadowCasterClass::FirstPerson => Color::rgb(0.8, 0.2, 1.0),
+                        ShadowCasterClass::Proxy => Color::rgb(0.15, 0.9, 0.85),
+                    },
+                    DebugView::LightVolumes => {
+                        let mut local = 0.0_f32;
+                        for light in &scene.lights {
+                            if let LightKind::Local { position, radius } = light.kind {
+                                local = local.max(1.0 - (position - g.world).length() / radius);
+                            }
+                        }
+                        Color::rgb(local, local * 0.35, 1.0 - local)
+                    }
+                    DebugView::HistoryValidity => {
+                        let valid = self.history.get(idx).is_some_and(|previous| {
+                            let current = buffers.lighting[idx];
+                            (current[0] - previous[0]).abs()
+                                + (current[1] - previous[1]).abs()
+                                + (current[2] - previous[2]).abs()
+                                < 0.12
+                        });
+                        if valid {
+                            Color::rgb(0.05, 0.9, 0.2)
+                        } else {
+                            Color::rgb(0.95, 0.08, 0.05)
+                        }
+                    }
+                };
+                out[idx] = color.to_rgba8();
+            }
+        }
+        Ok(out)
+    }
+
+    fn index(&self, x: u32, y: u32) -> usize {
+        y as usize * self.config.width as usize + x as usize
+    }
+}
+
+fn edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
+    (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+}
+
+fn schlick_fresnel(cos_theta: f32, class: MaterialClass) -> Vec3 {
+    let f0 = match class {
+        MaterialClass::Metal => Vec3::new(1.0, 0.72, 0.28),
+        MaterialClass::Glass => Vec3::splat(0.08),
+        MaterialClass::Hair => Vec3::new(0.22, 0.18, 0.14),
+        _ => Vec3::splat(0.04),
+    };
+    let f = (1.0 - cos_theta).powi(5);
+    lerp3(f0, Vec3::ONE, f)
+}
+
+fn material_id_color(id: u8) -> Color {
+    let h = (id as u32)
+        .wrapping_mul(747_796_405u32)
+        .wrapping_add(2_891_336_453u32);
+    let r = ((h >> 16) & 255) as f32 / 255.0;
+    let g = ((h >> 8) & 255) as f32 / 255.0;
+    let b = (h & 255) as f32 / 255.0;
+    Color::rgb(r, g, b)
+}

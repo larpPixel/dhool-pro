@@ -1,0 +1,503 @@
+# Vendor-Agnostic Real-Time Rendering Engine
+## Technical Specification v1.0
+### Derived from: Threat Interactive Pipeline Analyses (Vendor-Agnostic RT, E33, Crisis 3 MSAA, Oblivion Remake)
+
+---
+
+## Design Philosophy
+
+This engine demonstrates that compute-shader-based, vendor-agnostic rendering techniques can produce modern real-time reflections, lighting, and post-processing efficiently across a wide range of GPUs. No feature should require TAA to look correct — if it does, the feature is broken. Fix the source problem, not the symptom. Every implementation decision prioritizes measurable performance over theoretical capability.
+
+**Core constraints:**
+- No RTX, DLSS, FSR, or vendor-locked APIs
+- Shader Model 5 minimum target (compute shaders required)
+- 16.6ms frame budget at 60 FPS, high settings
+- Vendor-agnostic across AMD, Nvidia, and Intel hardware
+
+---
+
+## 1. Frame Budget Targets
+
+| Pass | Target (ms) | Notes |
+|---|---|---|
+| Prepass (depth only) | 0.3 – 0.5 | Vertex-only, no pixel shaders, no alpha-tested content |
+| Base Pass (G-buffer) | 1.5 – 2.5 | Materials, motion vectors, animated objects |
+| Shadow Maps | ≤ 0.6 | No floors/ground planes; cache aggressively |
+| Software RT (reflections) | 1.5 – 3.0 | At ~70% native resolution |
+| RT Temporal Reconstruction | 0.5 – 1.0 | 2-frame resolve |
+| Clustered Lighting | 0.5 – 1.0 | Tiled deferred shading draw |
+| SSDO / AO | 0.3 – 0.6 | Composited after lighting resolve |
+| Volumetric Fog | 0.3 – 0.5 | Blue noise, no IGN |
+| Post-Processing (full stack) | 1.5 – 2.5 | Bloom, DoF, tone map, AA |
+| Anti-Aliasing (SMAA4X) | 0.4 – 0.7 | SMAA + persistence, never TSR |
+| UI / Final Output | 0.1 – 0.2 | |
+| **Total Target** | **≤ 16.6ms** | |
+
+**Draw cost baseline:** optimized deferred draws must achieve ~1 microsecond per 1,000 pixels rendered. Tiny draws cost 9–15 microseconds minimum as a floor. Flag any draw deviating significantly from this ratio in the profiler.
+
+---
+
+## 2. G-Buffer Layout
+
+### Buffer Specifications
+
+| Buffer | Format | Contents |
+|---|---|---|
+| Albedo | RGBA8 (24-bit color, 8-bit alpha) | Base color (RGB), opacity reserved (A) |
+| Normals | RGBA16 | World-space normals (RGB), material flags (A) |
+| PBR Data | RGBA8 | Roughness (R), Metallic (G), AO mask (B), material ID (A) |
+| Depth | R32F (native 24-bit → R32 copy) | Hardware depth stencil + R32 float copy |
+| Motion Vectors | RG16 | Screen-space velocity for animated objects only |
+| Hi-Z | RGBA16 | Min/max 2×2 pixel depth values + discontinuity data |
+
+### Hard Format Rules
+
+- **Albedo minimum 24-bit.** 16-bit albedo causes color corruption at MSAA edges (Crisis 3 failure). Never compress below this.
+- **Normals minimum 24-30 bits.** 17-bit normals are insufficient for accurate lighting and MSAA. Pack into RGBA16 with material flags in the alpha.
+- **Material flags in normal map alpha.** All glass/window surfaces share the same flag value. Curb/concrete materials use a secondary value. Alpha channel encodes surface type, not opacity.
+- **Do not clear G-buffers unnecessarily.** Clear only depth, volumetric fog resources, and motion vector buffer at frame start. Base pass resources are overwritten by draw — clearing them wastes performance.
+- **The R8 shadow mask array must not be cleared** when stencil-based light shadow projection is used — clearing breaks shadow masking logic.
+
+### Hardware Depth Copy
+
+After the base pass, copy the native 24-bit hardware depth to an R32F buffer using a full-screen triangle (pixel shader, not compute). This R32 buffer feeds Hi-Z generation and software ray tracing. The R32 is then downscaled to half-resolution RGBA16 (min/max/discontinuity channels), then to quarter-resolution for light culling inputs.
+
+---
+
+## 3. Prepass (Partial Depth Pre-Pass)
+
+### Purpose
+Provide occlusion data for later draws to prevent expensive material shading behind already-rendered geometry. Hardware Z-testing then rejects occluded pixels automatically during the base pass.
+
+### Rules — What Goes In the Prepass
+
+**Include:**
+- Large, expensive objects exceeding a configurable screen-footprint threshold (both size AND surface area must qualify)
+- Objects whose materials exceed 4 texture samples
+- Objects whose expensive surface area is at risk of being overwritten by later base pass draws (target: keep overwrite below 10–15%; the unoptimized demo was at 21%)
+
+**Exclude — hard rules:**
+- Alpha-tested content of any kind (foliage, masked geometry) — alpha-tested foliage in the prepass doubled its cost with 2× MSAA in Crisis 3
+- Pixel shaders of any kind — prepass must be fully vertex-shader-driven. No velocity, no material data, no opacity
+- Motion vectors — these belong in the base pass only (moving them to the prepass costs +28.5% prepass time for a +1.6% base pass cost — a terrible trade)
+- Small or distant objects with minimal screen footprint
+
+### Draw Ordering
+
+Pre-passed objects must render **last** in the base pass, not mid-pass. The demo's mid-pass ordering was explicitly identified as wrong — it reduces the effectiveness of Z-test rejection on expensive materials.
+
+### Measured Gain
+A correctly implemented partial prepass provided a 7% whole-frame improvement (~1ms) in the reference demo, even without optimal draw ordering. Correct ordering will improve this further.
+
+---
+
+## 4. Base Pass (Deferred G-Buffer)
+
+### Material Rules
+
+**Hard texture limit: 4 texture samples per material draw.** Materials using 8–10 textures simultaneously perform 50%+ slower than the norm. There is no justification for exceeding 4 samples in standard PBR materials.
+
+**Preferred texture formats:**
+- BC7 — color/complex data, normal maps
+- BC1 — simple diffuse, single-channel masks where color accuracy is not critical
+- BC4 — single-channel grayscale (roughness, AO, height)
+- Avoid BC5 as a default choice — it is disproportionately expensive relative to alternatives
+- Never use uncompressed textures in the material pool except for intermediate render targets
+
+**Runtime texture blending is prohibited.** Bake per-object textures. Runtime material blending (as seen in UE5 terrain) is multiple times slower than pre-baked equivalents.
+
+**Motion vectors are written here, not in the prepass.** All animated objects output an additional RG16 motion vector at the end of the base pass.
+
+### Diffuse Lighting Model
+Use **Burley (Disney) diffuse** instead of Lambert. Lambert produces flat, plasticky indirect lighting — the "Unreal look." Burley is the correct directional behavior for surfaces under indirect light and is measurable in side-by-side comparisons against Frostbite-lit content.
+
+### Draw Ordering
+Render front-to-back within the base pass to maximize hardware Z-test rejection. The Hi-Z from the prepass and from prior draws should reject occluded geometry before material shaders execute.
+
+### Animated Objects
+Animated objects render at the end of the base pass with the additional RG16 motion vector buffer active.
+
+---
+
+## 5. Software Ray Tracing (Vendor-Agnostic Reflections)
+
+### Architecture
+Implemented entirely in compute shaders. No hardware BVH, no DXR, no vendor RT APIs. Compatible with any Shader Model 5-class GPU.
+
+### Resolution
+Trace at **~70% of native resolution** (not checkerboard/50%). This is the tested optimum from the reference demo:
+- Checkerboard (50%) requires 4 frames to temporally resolve and produces visibly pixelated output during camera motion
+- 70% native requires only 2 frames to resolve
+- Spatial coverage at 70% pairs cleanly with reconstruction upscaling without excessive pixelation
+- Only trace low-roughness pixels — high-roughness surfaces are handled by SSR or skip tracing entirely
+
+### Ray Budget
+At 70% native on a target GPU, expect 1–2 rays per pixel before denoising. The BVH must be lightweight — use simplified world-space proxy geometry (see Section 5.3).
+
+### World-Space Reflection Geometry
+Reflections need world-space geometry, but it must be drastically simplified:
+
+- **Large occluders** (buildings, vehicles, dumpsters, mailboxes) must be represented in world space
+- **Emissive objects** must be represented even if small — directly lit and emissive portions dominate reflected light and attract viewer attention
+- **Geometry detail level:** vertex-color-only, no textures on reflection proxies. Closer to Crisis Remastered 8th-gen console approach than full-PBR
+- **Bake proxies into larger structures** to reduce instance overhead. Dynamic objects (doors, vehicles) retain individual structures
+- **Skip color evaluation** on portions of reflection proxies not in direct lighting — performance saving with minimal visual cost
+- Proxies must be simpler than Assassin's Creed Shadows' reflection geometry
+
+### Glass and Transparent Reflections
+Glass/window materials are identified by their material flag in the normal map alpha channel. When a pixel is flagged as glass:
+
+- **Even vertical lines** trace exterior reflections (street, neon signs, sky)
+- **Odd vertical lines** trace interior reflections (blinds, interior geometry not present in the main G-buffer)
+- Both passes feed the temporal reconstruction step
+- Interior geometry that does not appear in the G-buffers must exist in the simplified world-space scene
+
+### Blue Noise Sampling
+All ray sampling uses blue noise instead of white noise or IGN. Blue noise distributes samples more perceptually than white noise and reduces visible structured patterns in the output. Reference: Dead Space Remake's blue noise reflection implementation.
+
+### Semi-Independent Denoiser
+The temporal reconstruction pass must **not** rely on TAA to clean up noise. TAA doing denoising work means TAA's aggression must increase, which blurs geometry detail. The denoiser is:
+- Motion-aware (uses motion vectors for reprojection)
+- Disocclusion-aware (detects invalid history via depth + motion vector mismatch)
+- History rejection triggers on fast camera motion or surface disocclusion
+- Outputs native-resolution RGBA16 with roughness parameter in alpha
+
+### Temporal Reconstruction Output
+Two-frame accumulation produces:
+- Two RGBA16 outputs — one resolved, one saved for next frame's reconstruction
+- Upscaling from 70% to native resolution via spatial upscale pass
+- Alpha channel carries RT depth information for compositing
+
+---
+
+## 6. SSR (Screen-Space Reflections)
+
+SSR is a **primary first-pass reflection layer**, not a replacement for software RT and not a competing pass running simultaneously with it. The reference demo's SSR was identified as "completely unoptimized with no good reason" and cost more than the RT pass itself — this is the target to beat.
+
+### Layering Order
+1. SSR executes first at **half resolution**, covering high-roughness surfaces and broad screen-space coverage
+2. Software RT supplements for low-roughness surfaces where SSR breaks down (off-screen data, contact reflections)
+3. The two layers composite — do not run them redundantly on the same pixels
+
+### Performance Reference
+Optimized SSR implementations in Phantom Pain, Frostbite titles, and Crisis 3 are the benchmarks. SSR must never exceed the cost of the software RT pass. If it does, it is broken.
+
+### Debug Enforcement
+The profiler must surface SSR cost vs RT cost as a first-class view. If SSR exceeds RT cost, flag it as a pipeline error.
+
+---
+
+## 7. Clustered / Tiled Deferred Lighting
+
+### Light Culling
+Use tile-based light culling (compute shader, small tiles). Downscaled depth discontinuity buffers at quarter-resolution feed the tile assignment. This approach was benchmarked as faster than compute-based alternatives in the reference pipeline.
+
+### Shadow System
+
+**Shadow map atlas:** 4K×4K D32 atlas, cleared with targeted quad draws on changed portions only — not full-atlas clears every frame.
+
+**Stencil-based restriction:** Render a geometry volume representing each light's casting range into the hardware depth stencil channel. Use the stencil to restrict shadow map projection pixel shader invocations to only lit pixels. Never run shadow projection on pixels outside the light's geometric volume.
+
+**Shadow mask:** R8 shadow mask array per light. Sky/cloud shadows written into index 0.
+
+**Floor/ground plane exclusion from shadows is mandatory.** Drawing floor meshes into shadow maps was measured as a key contributor to shadow costs exceeding 2ms in E33, vs 0.6ms in well-optimized titles. Exclude all horizontal large-surface-area geometry from shadow passes.
+
+**Aggressive shadow caching.** For static or slow-changing lights, cache shadow maps and only re-render on change. Dynamic sun requires per-frame updates; interior lights rarely do.
+
+### Lighting Pass Structure
+A single large multi-purpose shader handles:
+- Direct lighting (uses shadow masks + shadow map projection)
+- Indirect lighting composite
+- SSDO / color bleeding composite (see Section 8)
+- RT reflection buffer composite
+- Output: native RGBA16 (scene luminance in alpha)
+- Secondary output: RG11B10 for subsurface scattering (skin materials only — if absent, minimal cost)
+
+### Emissive Materials
+Rendered as a separate pass after the main lighting draw. Emissive output must not affect the alpha channel of the lighting buffer.
+
+---
+
+## 8. SSDO / Ambient Occlusion
+
+### Implementation
+Compute-shader based SSDO. Noisy raw output is passed through a depth-aware blur stored in the copied normal map buffer.
+
+### Compositing Order — Critical
+**SSDO must be composited AFTER the albedo/specular resolve, never before.**
+
+Compositing AO before the lighting resolve destroys subsample lighting data. This is the exact failure in Crisis 3 that caused uncanny MSAA edges even when subsample shading was forced. The sequence must be:
+
+1. Compute direct lighting with subsampling
+2. Resolve albedo + specular
+3. Composite SSDO into the resolved buffer
+
+### Color Bleeding (Optional)
+A 50-microsecond downsample of the albedo scene color produces a color bleeding resource for SSDO. Note: lit scene downsampling produces better color bleeding than albedo buffer downsampling.
+
+---
+
+## 9. Anti-Aliasing
+
+### Chosen Approach: Modernized SMAA4X with Persistence
+
+The engine targets **SMAA + persistence-based geometric accumulation**, not TSR, not pure TAA, not DLSS. This is the most optimized approach by cost-to-quality ratio, as documented.
+
+TSR costs 3.5ms in E33. SMAA TX2 from CryEngine costs ~0.5ms and produces a crisper, more stable image. This is a 7× cost difference with worse output from TSR.
+
+### Resolution-Tiered AA
+
+| Target Resolution | AA Configuration |
+|---|---|
+| 1080p | 2× MSAA + SMAA morphological + persistence via motion vectors |
+| 1440p | 2× MSAA + SMAA (1440p is 50% denser than 1080p, halving MSAA need) |
+| 4K (integer scale from 1080p) | Persistence sampling may suffice; 2× MSAA optional |
+| 8× MSAA | Never ship. Diminishing returns begin after 4×; 8× is overkill at any resolution |
+
+### Persistence Sampling
+Persistence accumulates geometric samples across frames using motion vectors — vendor-agnostic (unlike MFAA). Modern motion vectors and history rejection must eliminate ghosting in low-luminance scenes (MFAA's known failure mode). Persistence flicker is only a problem at low display resolution — modern 1080p+ displays suppress it.
+
+### MSAA in a Deferred Renderer — Implementation Requirements
+
+MSAA in deferred rendering requires specific handling or it fails visually:
+
+**GBuffer format requirements (already enforced in Section 2):**
+- 24-bit minimum albedo — color corruption at edges comes from 16-bit albedo (Crisis 3)
+- 24–30 bit normals — 17-bit produces incorrect subsample shading
+
+**Custom edge stencil:**
+- Build the MSAA edge stencil from G-buffer geometric data, not a heuristic approximation
+- The stencil must correctly identify all geometric edges — the Crisis 3 stencil missed large numbers of valid edges, causing jagged geometry even at 8× MSAA
+- Tag every 4×4 pixel quad containing MSAA subsamples in white, written to depth stencil at pixel frequency
+
+**Pixel frequency vs sample frequency separation:**
+- First: pixel frequency draws on non-multisampled render targets for non-edge quads
+- Second: sample frequency draws with dedicated per-sample pixel shader invocations for edge quads
+- Input swap between passes: pixel frequency uses non-MSAA targets, sample frequency uses original multisampled targets
+
+**HDR lighting output format:**
+- Output HDR lighting into two separate non-MSAA RGBA16 buffers at pixel frequency
+- Buffer 0: sample 0 data
+- Buffer 1: sample 1 data
+- This avoids the quad utilization hit from sample-frequency deferred shading
+
+**AO compositing order:** After albedo/specular resolve (see Section 8). Compositing before destroys subsample data.
+
+### SMAA Validation
+SMAA must be verified to be smoothing basic edges. Standalone SMAA frequently fails at edge detection when the implementation is broken. Add SMAA standalone output as a debug view to confirm it is contributing. If SMAA is not smoothing basic edges, it is not functioning and must be fixed before shipping.
+
+### TAA as a Tunable Dial, Not a Solution
+If TAA is used as an optional supplementary pass:
+- Document it explicitly as an aggression dial between noise suppression and detail blur
+- Conservative TAA: fog noise and low-frequency noise survive into final image, geometry detail preserved
+- Aggressive TAA: noise cleaned, geometry softened, motion trails on fast-moving objects
+- Never use TAA to mask broken rendering. If a feature requires TAA to look correct, fix the feature.
+
+---
+
+## 10. Decals
+
+Decals use **mesh-based projection** on already-rasterized geometry, without a dedicated prepass or dedicated G-buffer deferred pass.
+
+The correct pattern (from Frostbite and CryEngine): render a mesh volume over already-rendered geometry, using depth information to clip to the surface, without reprocessing that geometry.
+
+UE5's default — cube-projected decals requiring a full prepass and dedicated buffer — is explicitly prohibited. Its default behavior forces a full prepass for all geometry, adding unnecessary milliseconds to the frame.
+
+---
+
+## 11. Post-Processing Pipeline
+
+### Volumetric Fog
+Blue noise instead of IGN (interleaved gradient noise). IGN produces visible repeating diagonal patterns that are not resolved by TAA at reasonable TAA aggression levels. Half-Life Alyx and Days Gone are the reference implementations. Fog is composited onto the lit frame after the main lighting draw and significantly affects the alpha channel.
+
+### Transparents and Particles
+Rendered after volumetric fog compositing. Use the lowest-resolution depth discontinuity buffer for particle soft-edge blending.
+
+### Rain Effects
+- Rain occlusion map + noise texture → blurred result
+- Rain drops restricted to bright/illuminated areas via previous frame's bloom RG11B10
+- Blurred in two passes before compositing
+
+### Depth of Field
+Two half-resolution RGBA16 buffers for near and far field. Depth-related texture mipmapped before near/far blur passes. Near and far blurred versions composited on the post-fog frame.
+
+### Bloom
+Post-DoF result blurred down to 270p. 270p texture recycled and blurred progressively until it overwrites last frame's bloom RG11B10. Bloom composited during tone mapping.
+
+### HDR Luminance Averaging
+270p blur → 64×64 HDR luminance RG16 → averaged to 1×1 RG16. This 1×1 drives auto-exposure/tone mapping adaptation.
+
+### Tone Mapping
+LUT-based tone mapping (two draws to create/manage LUT). Bloom composited at this stage. Output: RGB10A2.
+
+### Anti-Aliasing Order
+1. Tone mapping output (RGB10A2)
+2. SMAA edge detection → RG8 unsigned integer edge mask
+3. Stencil restricts SMAA blending to edge pixels only
+4. SMAA blending writes RGBA16 blend mask → edge-smoothed RGB10A2
+5. SMAA TX2 (temporal component) with RGBA history and temporal information in alpha
+6. Final transfer to RGBA8 output
+
+### Film Grain
+Added as a composite effect in the RG11B10 screen composite buffer during final output. Not a substitute for stable rendering.
+
+---
+
+## 12. Shadow Pipeline Detail
+
+### Atlas
+4K×4K D32 shadow map atlas. Two reserved 256×256 spaces for specific light types. Targeted quad draws clear only changed atlas regions — never full clears.
+
+### Stencil Workflow Per Shadow-Casting Light
+1. Render geometry volume (light bounds) into hardware depth stencil channel
+2. Optionally refine with a second geometry volume pass
+3. Use stencil to restrict shadow map projection pixel shader invocations
+4. Write result to R8 shadow mask (index per light)
+
+### Shadow Quality Scalability
+| Level | Atlas Resolution | Update Rate | Floor Exclusion |
+|---|---|---|---|
+| Low | 2K×2K | Static cache + change detection | Yes |
+| Medium | 4K×4K | Mixed cache | Yes |
+| High | 4K×4K | Per-frame for dynamic lights | Yes |
+
+Floor exclusion is mandatory at all quality levels.
+
+---
+
+## 13. Debug Views and Profiling
+
+### Required Debug Views
+
+| View | Purpose |
+|---|---|
+| Albedo buffer | Raw base color output |
+| Normal map | Packed normals + material flags in alpha |
+| PBR data buffer | Roughness, metallic, AO mask, material ID |
+| Depth buffer | Hardware depth and R32 copy |
+| Motion vectors | Per-pixel velocity |
+| Hi-Z | Min/max depth pyramid |
+| Overdraw heatmap | Draw contribution per pixel |
+| Depth complexity | How many draws shaded each pixel |
+| Overwritten expensive materials | Surface area of expensive draws overwritten by later draws (flag >15%) |
+| RT ray cost | Per-tile ray tracing cost |
+| RT reflection buffer | Pre-reconstruction output |
+| SSR vs RT cost comparison | Side-by-side ms cost; flag if SSR > RT |
+| Shadow mask | Per-light R8 shadow masks |
+| Lighting tiles | Tile assignment visualization |
+| Volumetric fog | Pre-composite fog buffer |
+| SMAA standalone | Verify SMAA is smoothing edges independently |
+| AA comparison | Current AA vs no AA vs TAA |
+| Post-processing passes | Each post pass in isolation |
+
+### GPU Timing
+Per-pass GPU timestamps, reported in milliseconds. Frame breakdown view shows:
+
+- Total frame time
+- Per-pass ms cost
+- Prepass / base pass / RT / lighting / post breakdown
+- Flagged wasted work:
+  - Overwritten expensive material percentage (threshold: 15%)
+  - Draws accessing >4 textures
+  - Shadow passes including floor geometry
+  - SSR cost exceeding RT cost
+  - Any draw deviating significantly from the 1µs/1000px ratio
+  - Unnecessary buffer clears
+  - Bad draw ordering (expensive materials rendering before prepass-eligible geometry)
+  - Motion vectors computed in prepass instead of base pass
+
+---
+
+## 14. Scalability System
+
+All quality tiers must maintain vendor-agnostic operation. No tier enables hardware RT, DLSS, FSR, or any vendor-specific technology.
+
+| Feature | Low | Medium | High |
+|---|---|---|---|
+| RT resolution | 50% native | 60% native | 70% native |
+| Temporal accumulation | 4-frame | 3-frame | 2-frame |
+| Ray count per pixel | 1 | 1–2 | 2 |
+| Reflection geometry | Minimal proxies | Standard proxies | Full proxy set |
+| Shadow atlas | 2K×2K | 4K×4K | 4K×4K |
+| Shadow quality | Cached static only | Mixed | Per-frame dynamic |
+| Fog quality | Low sample count | Medium | Blue noise, full |
+| SSDO | Disabled | Half-res | Full |
+| Color bleeding | Disabled | Disabled | Enabled |
+| Post-processing | Bloom + tone map | + DoF + rain | Full stack |
+| AA | SMAA only | SMAA + 2× persistence | Full SMAA4X |
+| Material complexity | 2 textures max | 3 textures max | 4 textures max |
+
+**Upscaling is not a scalability tier.** Upscaling should not be used to compensate for missing performance budget. All tiers target their resolution natively. If performance is insufficient, reduce a scalability feature, not the output resolution.
+
+---
+
+## 15. Material System Rules (Summary)
+
+| Rule | Value |
+|---|---|
+| Max textures per material | 4 |
+| Albedo format minimum | 24-bit (RGBA8) |
+| Normal format minimum | 24-bit (packed RGBA16 with alpha flags) |
+| Preferred compress formats | BC7, BC1, BC4 |
+| Avoid | BC5 as default, uncompressed in material pool |
+| Runtime texture blending | Prohibited — bake per-object |
+| Diffuse model | Burley (Disney), not Lambert |
+| Foliage | Conventional vertex shaders, base pass only, no prepass, no micropolygons |
+| Floor/ground materials | Excluded from shadow passes; simplest possible shaders |
+| Glass materials | Material flag in normal map alpha; interlaced RT tracing |
+
+---
+
+## 16. Geometry and LOD Rules
+
+- LOD transitions must not produce visible pop. Use cross-fade dissolve at transition boundaries.
+- No micropolygon geometry. Sub-pixel triangles produce aliasing that requires TAA blur to suppress — TAA blur defeats the purpose of detail geometry.
+- Shadow geometry must be optimized separately from base pass geometry. Unoptimized base pass geometry multiplies into shadow cost.
+- Foliage: opacity-masked, vertex-shader-driven, baked animation where possible. Never draw opacity textures in a prepass or visibility buffer.
+
+---
+
+## 17. Key Anti-Patterns (What This Engine Explicitly Avoids)
+
+| Anti-Pattern | Source | Why Avoided |
+|---|---|---|
+| Hardware ray tracing APIs | All videos | Vendor lock-in, high cost, inferior to optimized compute |
+| DLSS / FSR as performance crutch | Video 1 | Blurry output, vendor dependency, masks real problems |
+| TSR / Epic TAA | Video 2 | 3.5ms for inferior output vs 0.5ms SMAA TX2 |
+| Lumen GI | Video 2 | Smear artifacts, TAA dependency, unstable under motion |
+| Nanite / micropolygon geometry | Videos 2, 4 | Sub-pixel aliasing, shadow cost multiplication, cluster culling failures |
+| Virtual textures (UE5 style) | Video 2 | Stochastic sampling noise, forces full prepass |
+| IGN volumetric fog | Video 1 | Visible repeating diagonal patterns, not resolved by TAA |
+| Lambert diffuse | Video 2 | Flat, plasticky indirect lighting |
+| Alpha-tested content in prepass | Videos 3, 4 | Doubles prepass cost with MSAA; never justified |
+| Motion vectors in prepass | Video 4 | +28.5% prepass cost for +1.6% base pass cost |
+| Floors in shadow passes | Videos 2, 4 | Major shadow budget waste |
+| >4 textures per material draw | Videos 1, 4 | 50%+ draw slowdown, no visual justification |
+| BC5 as default format | Video 1 | Disproportionate cost vs alternatives |
+| SSAO / AO composited before lighting resolve | Video 3 | Destroys subsample data; uncanny MSAA edges |
+| SSR running simultaneously with RT | Video 1 | SSR exceeded RT cost in the demo; redundant work |
+| TAA masking broken rendering | All videos | Treats symptoms, does not fix underlying issues |
+| Full G-buffer clear every frame | Video 1 | Wastes performance; base pass overwrites anyway |
+
+---
+
+## 18. Reference Performance Data
+
+All figures from Threat Interactive pipeline captures on desktop RTX 3060 (used as a Shader Model 5 representative, with hardware RT disabled).
+
+| Benchmark | Cost |
+|---|---|
+| CryEngine SMAA TX2 | ~0.5ms |
+| UE5 TSR | ~3.5ms |
+| Demo software RT at 70% native | ~8ms (unoptimized; debugger overhead) |
+| Demo SSR (broken) | >RT cost (flagged as error) |
+| Crisis 3 base pass with 2× MSAA + alpha-tested prepass | ~2× vs no MSAA |
+| UE5 Nanite visbuffer prepass alone | ~4ms |
+| UE5 E33 shadows | ~2ms (vs 0.6ms in optimized titles) |
+| Prepass motion vector removal gain | +28.5% prepass performance |
+| Partial prepass gain (reference demo) | ~1ms / 7% whole-frame |
+| Overwritten expensive material surface | 21% (target: <15%) |
+
+---
+
+*Spec version 1.0. Derived from Threat Interactive analysis videos: Vendor-Agnostic Raytracing & Update on MASSIVE Project; Clair Obscure Expedition 33 Graphics Analysis; Crisis 3 MSAA Analysis; Oblivion Remake GPU Optimization Analysis.*

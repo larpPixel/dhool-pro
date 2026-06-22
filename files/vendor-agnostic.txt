@@ -1,0 +1,736 @@
+
+The Start Of RTX Marketing
+At least Nvidia wasn't lying with a
+slogan. This is an urgent video for
+every gamer and developer to watch if
+they want a proconsumer graphics
+industry. This video was supposed to be
+an 8-minute video, but at this point
+where I have already edited the main
+analysis and conclusions, this video is
+ending up way beyond what I wanted to
+manage. Stick with me because I have to
+undo almost a decade of Nvidia's bull
+crap marketing in so little time. I'm
+going to have to rush through this intro
+to get you up to speed. It has been very
+evident that we perfectly predicted the
+state of the industry 2 years ago. And
+we talked about Epic Games compensatory
+IP acquisitions for their lackluster
+demos. The demo that was being
+referenced was this Star Wars ray traced
+reflections demo that was riddled with
+horrible compensatory effects like blur,
+film grain, chromatic aberration. On top
+of that, it wasn't even very performant.
+And we can see in this forcibly paused
+shot, this pathetic demo was using two
+vendor locked technologies. Vendor
+locked API reflections pushed by Nvidia
+and DLSS. That's right. The demo is not
+even running at a native resolution. So,
+here we can take off the vendor locked
+image quality, which looks like blurry
+crap. Anyway, now let's see how much the
+reflections cost. Keep in mind, they are
+running at a quarter rate of the native
+resolution. And as you can see, it's a
+massive 8 millisecond cost. That's
+so-called hardware accelerated
+reflections. Note, the SSR kicked in,
+which disrupts you from getting a more
+accurate timing measurement for RT
+reflections. But let's go back to native
+resolution and check out the performance
+with the defaulted checkerboarded RT
+reflections. These RT reflections now
+basically cost the same as HalfLife Alex
+and Days Gone running at more than 60
+Vendor Agnostic Raytracing & Update On MASSIVE Project
+fps on our hardware setup. You need to
+see that crappy performance because the
+rendering ratios were synchronized with
+this demo, which by default renders at
+native resolution, uses superior vendor
+agnostic image quality, pretty much runs
+three times faster the entire time in a
+much larger environment while using
+vendor agnostic ray traced reflections.
+This video will show you exactly how
+this project is rendered, why it has
+been tested improperly by most
+influencers, why things in this demo are
+actually completely unoptimized so that
+real world optimized games can achieve
+better performance. We will discuss how
+the so-called drawbacks of this demo are
+actually shared across different
+hardware ray tracing implementations and
+raise market value for this type of ray
+tracing in games in order to balance out
+the horrendous and constantly pushed
+narratives and standards adopted by
+ignorant influencers and GPU benchmark
+publishings. As a quick note, I have not
+been working on this video in the last 2
+months. In this video, I'll be talking
+about vendor agnostic ray tracing in
+great detail. This was the video I felt
+we as the graphics industry needed. so
+badly two months ago, but instead an
+earlier look at another topic was voted
+in by our Patreon members. That is the
+video I have been working on in the past
+two months, and it's basically the video
+you're watching now, but it discusses
+almost every single aspect of rendering.
+I had to take a break from that project
+because working on the same project for
+2 months now, even into the third month,
+it really exhausted my patience and I
+felt very burnt out. Thank you all for
+your support. Enjoy the next 22 minutes
+of discussion and I'll try to pack in as
+much data and common sense conclusions
+at the end because now this video is
+getting so long and it's stressing me
+out. So yeah, let's just go ahead and
+get to it. All right, so here's the
+frame we're going to analyze. This frame
+was chosen because it renders a lot of
+different things like tons of on-screen
+geometry. Obviously, we've got a good
+shot of reflections, including very
+important glass reflections. We have our
+animated object in view, which is the
+drone in the upper right. It has a lot
+of emissive materials and we have some
+depth of field in the far back. So this
+Main Geometry Passes
+is the GPU pipeline for that frame. And
+the first thing that it does is use two
+quads to clear some parts of this 4KX4K
+D32 shadow map atlas. As you can notice
+the corner changes in the top left. Then
+the GPU proceeds to use hardware clears
+for these buffers. It clears the main
+scene depth, some volutric fog
+resources, and the motion vector buffer.
+This pipeline saves performance by not
+clearing the base pass resources but
+loses some performance by clearing these
+three. The R8 goes completely unused in
+this pipeline and the RGBA8 and RGBA6
+buffers are completely overwritten with
+hardware resource copying in the next
+draws they're used in. Now the next step
+encompasses the majority of this
+pipeline by rendering geometry into
+deferred GBuffers. The albido alpha is
+completely blank, but it's probably
+reserved for opacity values typically
+used by skin or plant materials. And
+while normals are usually stored in
+32-bit formats like RGBA or preferably
+RGB 10 A2, normals here are packed in an
+RGBA 16 along with additional material
+tags in the alpha. The alpha normal map
+mostly stores information related to
+glass/ window materials all sharing the
+same value. Some curb/conrete materials
+use a third value as you can see in the
+darker gray areas. The best way to
+analyze the optimization of this pass is
+by analyzing the individual efficiency
+of the pixels rendered in this view.
+Short wide draws render the pixels at
+the lowest cost, such as this draw. This
+is the most efficient material rendered
+in the base pass. This highlighted
+section in the albido buffer displays
+what surface area this draw worked on.
+For clarification, most of the objects
+in this scene are values rendered from
+the previous frame. If we look at the
+depth buffer when this mesh was drawn,
+the solid objects are the meshes that
+rasterized before draw 12. Later draws
+like this very unoptimized floor piece
+fill the buffer simultaneously with
+current frame data. Now, I want to
+quickly remind viewers of hardware Z
+testing, which is why this mesh was not
+rendering pixels in the corner despite
+the mesh boundary. The hardware is
+simply using the depth values provided
+by pre-existing draws to prevent shading
+behind already rendered objects. That's
+why clearing the depth buffer at the
+start of the frame is so much more
+important than clearing the other
+deferred G-buffers. But moving on, I
+want to show why these two materials
+perform so differently even though they
+render pretty much the same amount of
+pixels. Now, none of the materials in
+this demo are particularly optimized. At
+the very most, you want to sample three,
+maybe four textures if it's a really
+complex material. It's one of the
+reasons why I can't stand light maps. We
+have videos on our channel discussing
+what formats these textures should be.
+But one of the things I'll clue you in
+on is that a single BC5 texture is crazy
+expensive compared to reasonable
+alternatives, and many materials are
+using more than just a single BC5
+texture. There's also other issues with
+how these are packed. There are some
+draws like 338 that have a more
+reasonable layout, but the majority of
+materials in this demo are like this.
+And it's not super clear if it's because
+it's a rushed project or if they built
+it this way for so-called benchmark
+purposes to, you know, stress test
+systems a bit more. But that would have
+been a very stupid thing to do because
+many people went to go test this demo to
+get a taste of how performant hardware
+agnostic RT could be. Anyways, what I
+want to show here is that half the base
+path cost comes from these highlighted
+draws. And the pink surface area
+represents the minimal amount of pixels
+these draws shaded. I say minimal
+because this view mode won't show what
+these in between draws may have shaded
+over. This overdraw view mode is really
+the best thing to determine the
+contribution of those. But what you need
+to see is that by the end of the base
+pass, lots of that super expensive
+material surface area is overwritten by
+later draws indicated by blue surface
+area. About 21% of the most expensive
+materials are overwritten by later
+draws. There are popular documented ways
+to optimize this problem, such as only
+rendering the depth of these objects
+first because non-extured depthly
+rendering will perform at least 80%
+faster while providing valuable
+occlusion data for later draws and then
+rendering these objects with their
+textured materials again at the end of
+the geometry pass which will limit
+material processing to the scene's final
+depth surface area. The lack of a
+partial prepass is extremely detrimental
+to this demo's performance, and we'll
+see more examples of this later on. At
+the end, animated objects are rendered
+in the base pass with that additional
+motion vector RG16. Afterwards, a pixel
+shader is used to copy the native 24-bit
+hardware depth into a native 32-bit R32
+flow buffer. That native R32 flow is
+then used to output an unused
+half-resolution 540p D24 and depth
+downscaled RGBA 16 with the different
+channels containing different depth data
+like minimum maximum 2x2 pixel values
+and other depth discontinuity
+information. That halfresolution RGBA6
+depth discontinuity buffer is then used
+to create a 135p rgba6 and 135p d24
+which will be used for light calling
+later on. The hardware depth is used
+again to create a highz followed by a
+decal pass which does not use any
+additional buffer inputs for projection.
+Those two reserved 256x 256 spaces in
+the shadow map have information rendered
+inside of them. Then the normal map RGBA
+16 data is copied into that uselessly
+cleared resource discussed earlier. Then
+that native R32 depth and copied normal
+map RGBA 16 are used as additional
+inputs for box projection decals. The
+normal map RGBA 16 albido buffer and
+remaining RGBA8 PBR buffer are copied
+into identical buffers to act as inputs
+along with the hardware depth stencil
+channel and native depth R32 for a rain
+projection pass. Not a whole lot is
+changed in the normal and albido buffer.
+The impact is more noticeable in the
+main PBR data buffer. The inputs are
+designed with tiling in mind along with
+an aerial interior exclusion texture.
+Then the native depth R32 normal map
+Vendor Agnostic Raytracing
+RGBA 16 RGBA88 PBR buffer are used along
+with specific resources including an
+uncompressed PBR texture pool to
+software ray trace low roughness pixels.
+Four different 760p RGBA 16s are
+produced with different deferred
+rendering alike values. The last RGBA 16
+contains 16 bit precision depth and the
+alpha. The other buffers contain values
+in their alpha channels as well which is
+shown here in reverse sequential order.
+Now you should know a few things here.
+This software array tracing is done with
+a compute cheater. For many years,
+actions on the GPU were limited to the
+rasterization pipeline. For instance,
+when the GPU copied the 24-bit depth
+hardware to the 32bit R32 buffer, the
+developers had to draw a triangle, which
+used three vertex shaders, which
+basically cost nothing. And they had to
+draw that triangle over every pixel. So
+that a pixel shader that contains the
+precision shifting copying logic was
+invoked for each pixel. This was a 1080p
+buffer, so about 2.7 million pixel
+shaders were invoked. And that's where
+most of the cost comes from for this
+straw. Compute shaders don't need
+triangles to shade pixels. Nor do
+compute shaders even have to shade
+pixels. Compute shaders are a vendor
+agnostic functionality that allows
+developers to use the raw parallel
+processing power of the GPU for any
+abstract computation like updating
+animation skinning particle logic which
+is what some of the beginning computers
+in Dead Space remake do. Compute shaders
+were mainstreamed by the eighth console
+generation, which is why seventh gen
+focused productions like Crisis 3 don't
+have compute shaders in their pipeline.
+It is through compute shaders that will
+allow any shader model 5 GPU regardless
+of the vendor to utilize its raw
+processing power for ray tracing. As
+discussed earlier, we captured the demo
+with very high settings enabled, which
+provides a unique advantage over
+alternative scalability options. Most
+ray traced engines/ games will provide
+native resolution tracing on high-end
+scalability options, but these perform
+terribly regardless of the engine or
+implementation. So they will typically
+provide a lower ray tracing option that
+will trace at a half resolution which
+means it's a three times smaller RT
+buffer which means the spatial upscaling
+will look extremely pixelated and
+require four different frames with
+little variance in motion to be
+temporally accumulated to a native like
+RT image which will never happen in
+basic gameplay. This demo renders the
+scalability RT buffer at a 30% lower
+resolution than native. This is
+basically equivalent to checkerboard
+tracing depending on how buffer formats
+are handled by the engineers. But these
+two have great coverage that pairs well
+with spatial upscaling to prevent an
+overly pixelated output and only
+requires two frames to resolve. It's a
+proper balance between performance and
+visual quality. Unreal Engine eventually
+implemented checkerboard traces and
+newer versions. The last thing to note
+here is what appears to be transparent
+glass materials have their interior and
+exterior ray traced through an
+interlaced pattern. We can see low
+roughness surfaces are traced in a
+uniform fashion based on input normals.
+But these windows have alternated lines.
+Every even and odd line contains the
+exterior and interior reflections. This
+is easier to understand if we use
+another shot in the demo. We can see in
+the window material the exterior RT
+reflection of the neon sign. But we can
+see the blinds behind the window. Those
+blinds do not exist in the deferred
+GBuffers. Only the window mesh does. So
+when the software RT comes around, if
+the pixel is tagged with that window
+material flag, every other vertical line
+will trace the exterior reflections
+where the neon sign and other objects
+appear. Then the remaining vertical
+lines trace the interior to show the
+blinds behind the glass. The results are
+then temporally reconstructed to produce
+the final image. This is an interesting
+way to ensure reflections on transparent
+materials. A small compute shader
+processes some tiled lighting parameters
+which are used in the next full screen
+triangle tile deferred shading draw
+which lights the RT resources. The main
+RGBA 16 output resolves the interlaced
+window materials and the alpha contains
+RT depth information. The second RGBA 16
+output purpose is a little more unclear,
+but it only contains information
+regarding the exterior reflections and
+contains a luminance map in the alpha.
+These two outputs are used along several
+native resolution G-buffers and RT
+accumulation buffers for temporal
+reconstruction. Two of the buffers look
+pretty much identical and are saved for
+the next frames temporal reconstruction
+step. Two of the outputs simply hold a
+temporally accumulated result with extra
+information stored in the alpha and are
+used with two native resolution Gbuffers
+to upscale the reflections to a native
+resolution RGBA 16 with the alpha
+containing some type of roughness
+related parameter. The noisy SSDO is
+Indirect, Direct, & Emissive Lighting
+shaded in this draw. The RGBA8 output is
+passed through a depthaware blurring
+pass that stores the result in the
+normal map RGBA 16 copy buffer. This 50
+microcond stage down samples the albido
+scene color for an SSDO color blading
+resource. This will give SSDO more of an
+SSGI look, but I don't typically care
+for albido buffer downsampling over lit
+scene downsampling. two list are cleared
+and are updated accordingly by these
+draws that render geometric light bounds
+against a downscaled D24 resource and
+uses the smallest depth discontinuity
+RGBA 16 as input. While I probably won't
+end up promoting tile deferred shading
+for reasons that will hopefully be
+explained in the next video, this light
+calling method seems to be much faster
+than compute-based methods seen in other
+pipelines. So, we'll definitely want
+this investigated more. Some new
+resources are cleared and the first
+index of the R8 shadowmap array has some
+type of sky/cloud shadow written inside
+the first R8 in the array. Then a
+geometry volume representing a light's
+casting range is rendered inside of the
+hardware depth stencil channel. Then the
+result is oddly refined by another
+geometry volume. That stencil channel is
+used to restrict expensive shadow map
+projection invocations on the R8 shadow
+mask mentioned before. The inputs are
+pretty simple. It's just the shadow map
+atlas scene depth and the shadow
+softening noise texture. Two more
+volumes imprint a new value in the
+stencil which is used to prevent the
+corresponding shadow map pixel shading
+invocations in the second index of the
+R8 shadow mask buffer. Because this
+resource wasn't cleared, it is difficult
+to show the impact of the shadow map. A
+massive multi-purpose shader performs
+direct lighting and composits SSDO color
+bleeding, indirect lighting, and the RT
+reflection buffer in a native RGBA 16
+with what could potentially be scene
+luminance stored in the alpha channel.
+An RG11B10
+is also outputed, but that's for
+materials that need screen space
+subsurface scattering like skin, in
+which these two draws would scale with
+in terms of cost. But because there's no
+skin materials, it's empty and hardly
+any performance is lost. Then emissive
+materials are rendered again, which ends
+up having no effect on the alpha
+Remaining Pipeline (Major Issues)
+channel. The volumetric fog is updated
+and managed in this portion and is
+composited on the lit frame in draw
+1468, which induces significant changes
+in the alpha channel. Cryine's fog
+hasn't really changed a whole lot as
+indicated by a similar appearance seen
+in KCD2 which also had this IGN or
+interled gradient noise patterns coming
+from the fog just wasn't present in the
+capture we took for KCD2. It is without
+a doubt one of the most poor looking
+volutric fog systems out there because
+of this noise pattern. Even though I
+think there's very little use cases for
+blue noise, it's still better to use
+that in fog like Half-Life Alex and Days
+Gone instead of IGN. Transparents and
+sprite effects are rendered, followed by
+some type of effect that uses the lowest
+resolution depth discontinuity buffer,
+rain occlusion map, and noise texture to
+produce this result, which is then
+blurred in two passes and used along
+several rain textures and the last
+frames bloom, RG11B10 to ensure
+raindrops are only seen in bright
+illuminated parts of the frame. Since
+the volutric fog, many of these draws
+are affecting the alpha channel. A need
+of RG11B10 has the RGBA6 scene copied
+into it, but the RG11B10 is never used
+again in this pipeline. Though an exact
+copy of the RGBA 16 scene is made in
+this draw and is used nine draws later.
+Two half-resolution RGBA 16s are created
+with depth of field related information
+along with a depth related texture that
+is midmapped in this section before
+being used to create near and far field
+blurred half-resolution versions of the
+scene which are then composited on the
+frame in the last draw of this section.
+That post DOF result is blurred down
+into a 270p blurred texture. That
+texture is then used along several
+GBuffers to create this 64x 64 HDR
+luminance RG16, which is then averaged
+all the way down to a 1x1 RG16. Then
+that 270p texture is recycled and
+blurred down continuously until it
+overwrites the last frames bloom
+RG11B10.
+The purpose of these draws are unclear
+as the resources they affect have
+nothing to do with previous or following
+draws. The skin screen space ass RG11B10
+outputed by the lighting stage is
+cleared to hold some composite effects.
+The half-resolution RGBA 16 depth
+discontinuity and that post DOF blurred
+270p image texture are used to create
+this halfresolution RGB 10 A2 which ends
+up being a completely blank image. This
+lookup table is created and managed in
+two draws and is then used in this tone
+mapping stage where bloom compositing
+also takes place. The RG8 unsigned
+integer used earlier is cleared for the
+next stage where SMA stores a twochannel
+edge mask based on the tonemapped RGB10
+A2 scene. The hardware depth stencil
+channel stores what pixels were affected
+by the first SMA pass to restrict pixel
+invocations in the next SMAA blending
+stage. It writes the blending mask in a
+cleared RGBA 16 which is then used
+alongside the tonemapped frame to output
+the edge smoothed result inside another
+RGB 10 A2. The SMA2TX pass is processed
+next with the RGBA6 history alpha and
+the output alpha containing specific
+temporal information. This draw
+transfers the anti-aliased RGBA6 output
+into an RGBA88 with the screen composite
+effect stored in the RG11B10 along with
+some film grain. The next step simply
+renders the time frame UI. Now, there
+Conclusions
+are some issues in the pipeline we'll
+get into, but one of the things I want
+to point out here is that the total sum
+ended up being a 13.80 millisecond cost,
+but the indemo performance with the
+debugger software overhead stated a
+median performance that was 30% faster.
+These timing inconsistencies have only
+happened in the past with Jedi Survivor.
+With Unreal Engine games, I can usually
+use commands to turn off parts of the
+pipeline one by one to get a more
+accurate timing, but for this analysis,
+my points about this demo are only
+enhanced. I definitely think the
+software ray tracing is bloating the
+debugger timings, but it's still going
+to give a good idea where processing is
+the heaviest in this pipeline. And none
+of our major conclusions rely on
+smaller, that is, more accurate timings
+only gathered by real-time frame
+counters. So, now that you have this
+data under your belt, take a look at one
+of these frames from the demo. It's the
+worst performing part of the benchmark,
+but it should confuse anyone who
+understands how rendering works and ask,
+why is this shot performing so poorly in
+a demo that usually hits around 100 FPS
+on our setup? It's not the amount of
+pixels that need to be traced, as higher
+surface area RT frames run faster than
+this shot. The biggest difference is how
+much the rays don't really align with
+each other due to more complex normals.
+But this frame also performs terribly
+because again the base pass has extreme
+issues with material data being
+overwritten which would have been fixed
+with a partial prepass which I ended up
+getting working on this demo using
+Cryine commands in the user config file.
+As we can see rendering the depth of
+these close objects is extremely fast.
+This prepass remains performant because
+it's not rendering everything in the
+scene just certain objects beyond a
+certain size therefore surface area
+threshold. When we render the
+retrospective objects and the base pass
+afterwards, expensive materials like
+this one, which use around eight
+highresolution, poorly compressed
+textures, now this material is only
+processed where it will be visible to
+the user by the end of the base pass. In
+other words, nothing overwrites it. Now,
+the ordering is sort of odd since this
+depth prepassed object renders in the
+middle of the base pass and you would
+really want pre-passed objects to render
+last in the base pass. This prepass
+ended up providing a 7% performance
+improvement for the entire scene. Almost
+an entire millisecond gained. And
+remember, we only have 16 milliseconds
+to work with if we want to hit 60 fps in
+the worst case scenario. The next issue
+is anti-aliasing. Now, the temporal
+component was pretty conservative in
+comparison with more abuse of pipelines,
+and that's why the fog noise is still
+present in the image. The more competent
+the TA, the less it can be abused. But
+you can see clearly it's blurring out
+some detail because it's averaging out
+so many pass frames in order to
+compensate because the standalone SMA
+isn't working properly. As we can see in
+its standalone image, it's not smoothing
+basic edges. It's an issue we addressed
+a lot in our Cry Engine revisit when we
+reviewed the deferred MSA implementation
+in Crisis 3. Now, another thing I want
+to mention is how pixelated the very
+high performance RT tracing looks when
+the camera isn't moving. There are two
+different methods we can combine to
+resolve this issue. We can use blue
+noise sampling. Our Dead Space remake
+analysis discussed this in great detail
+here. It works great in Jedi Survivor,
+which doesn't even use specular motion
+vectors, which we'll eventually discuss
+in another video. And Unreal, or at
+least 5.7 does have a superior
+reconstruction method for checkerboarded
+reflections by jittering the reflections
+and utilizing a semiantalasing
+independent deninoiser. I say
+semi-independent on TA because it
+officially relies on incompetent TA
+because Epic pushes developers to render
+traces below that checkerboarded
+resolution, that quarter pixel count we
+mentioned earlier. Lumen reflections
+also support higher roughness
+reflections through blue noise scattered
+sampling. Whereas this demo uses Q maps
+when lighting the reflections and
+rasterized geometry. These comparisons
+confirm an initial conclusion when
+analyzing Kalista Protocol that
+butchered rasterization, in this case
+bad Q maps, are more destructive to
+realism than no Q maps. Here we can see
+how ridiculously unoptimized the SSR is.
+There's no good reason for SSR to be
+surpassing the cost of ray tracing like
+it does here. The halfresolution SSR
+shown here is still completely
+unoptimized. We know this for sure
+because this channel has measured the
+performance of superior implementations
+in past videos as seen in the Phantom
+Pain, Frostbite titles, and even Crisis
+3. There are so many aspects in which we
+can optimize compute shader ray tracing
+performance using the same cutbacks
+hardware ray tracing is using today.
+That is unless you're using something
+like Nvidia's fake path tracing. We have
+barely scratched the surface of what a
+scam hardware ray tracing is in this
+video, which is why we're going to
+revisit this topic in the future. But
+for now, you need to share this content
+on every platform possible because more
+people need to remember what vendor
+agnostic graphics are capable of. Post
+it in as many Discord servers and
+subreddits as possible. If you see it
+already posted in a community, post it
+again because you will need to overwhelm
+moderators that defend anti-consumer
+tech cultures. Nvidia's marketing bots
+are relentless, so we need to match
+Nvidia's aggression. You also need to
+demand GPU reviewers to stop making
+hardware rate tracing comparisons
+because they feed that anti-consumer
+culture just as they've been feeding and
+blowing up the upscaling culture. They
+should be testing benchmarks like this,
+that is with settings mentioned in the
+pinned comment. Make sure to subscribe
+Why You Should Consider Supporting Us
+to raise the market value for vendor
+agnostic optimization and make sure to
+consider joining our Patreon because we
+are here to dominate in content creation
+and have that fund our development
+endeavors. But we can't produce videos
+as fast as the most successful content
+creators because this content requires
+such meticulous testing to back
+conclusions. If you join now, you'll be
+supporting one of our most massive
+projects yet. A project that is going to
+have profound effects on the industry.
+And what you're seeing on screen is the
+basic skeleton of that video. Make sure
+to keep your eyes peeled because that
+video will release with temporarily free
+materials to download before becoming
+Patreon exclusive content. So share it
+like crazy. Hype people up for its
+release.

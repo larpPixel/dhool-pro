@@ -1,0 +1,169 @@
+MASTER PROMPT: Vendor-Agnostic Real-Time Rendering Engine
+
+You are a senior real-time graphics architect and engine programmer. Design and implement a modern vendor-agnostic real-time rendering engine focused on stable image quality, predictable performance, and practical asset workflows. The engine should avoid dependence on vendor-locked ray tracing, blurry temporal anti-aliasing, noisy shadowing, excessive micropolygon geometry, and wasteful material/shader passes.
+
+Primary Goal
+
+Create a rendering engine architecture suitable for modern PC and console-style hardware that can produce clean, realistic, temporally stable images at 60 FPS or higher on mid-range GPUs. Prioritize clear pixels, efficient geometry, robust visibility, and scalable lighting/reflection systems over marketing features.
+
+Core Design Principles
+
+1. Vendor agnostic first:
+   - Do not require Nvidia, AMD, or Intel exclusive features.
+   - Use standard graphics APIs and broadly supported GPU features.
+   - Hardware ray tracing may be optional, but the engine must have a strong compute-shader/software ray tracing path.
+   - Prefer Shader Model 5+ compatible compute approaches where practical.
+
+2. Stable image quality:
+   - Avoid relying on heavy blurry TAA to hide noise, shimmer, dithering, bad shadows, or unstable GI.
+   - Use temporal accumulation only where it improves stability without destroying detail.
+   - Support strong non-blurry AA options such as SMAA, SMAA T2x, MSAA hybrids, specular anti-aliasing, filtered mipmaps, and modern rejection logic.
+   - Preserve texture detail and motion clarity.
+
+3. Efficient geometry instead of brute force:
+   - Do not build the renderer around micropolygon or "infinite detail" assumptions.
+   - Use authored or automated LODs with smooth transitions.
+   - Avoid sub-pixel triangle density that creates aliasing and forces blur.
+   - Prefer optimized vertex-shader paths where they outperform meshlet/micropolygon paths.
+   - Provide tools for LOD generation, triangle-density analysis, overdraw analysis, and asset warnings.
+
+4. Practical optimization over visual gimmicks:
+   - Every major render feature must have measurable cost, quality mode tiers, debug views, and fallback paths.
+   - Avoid full-screen work when tile, stencil, scissor, clustered, or partial methods can reduce cost.
+   - Avoid unnecessary clears, copies, texture fetches, and redundant render targets.
+   - Prioritize stable frame time over peak screenshot quality.
+
+Required Renderer Architecture
+
+Build a deferred or hybrid deferred renderer with the following pipeline:
+
+1. Frame setup:
+   - Clear only resources that need clearing.
+   - Track transient render targets and alias memory safely.
+   - Build per-frame camera, exposure, motion vector, culling, and light data.
+
+2. Visibility and prepass:
+   - Implement a partial depth prepass for large opaque occluders and expensive materials.
+   - Use front-to-back sorting where useful.
+   - Keep the prepass depth-focused and fast.
+   - Do not calculate unnecessary pixel-shader data in the prepass unless required.
+   - Generate Hi-Z depth for occlusion, SSR, RT culling, decals, and light culling.
+   - Exclude alpha-tested foliage and dense masked content from the prepass unless profiling proves a benefit.
+
+3. Geometry/base pass:
+   - Write compact, well-designed G-buffers.
+   - Store normals with sufficient precision, such as RGB10A2 or another quality-conscious packing format.
+   - Avoid albedo compression schemes that corrupt MSAA/subsample edges.
+   - Generate motion vectors correctly for static, skinned, animated, instanced, foliage, and camera-driven movement.
+   - Keep material texture counts low and expose warnings for high-cost materials.
+   - Support baked material packing and object-specific texture baking for complex assets.
+
+4. Materials and textures:
+   - Prefer efficient compressed formats and channel packing.
+   - Avoid wasteful high-resolution atlases when smaller mip-friendly textures are enough.
+   - Avoid stochastic virtual texture blending that creates visible noise unless a non-noisy method is implemented.
+   - Provide automatic material cost reports based on texture count, texture format, overdraw, and shaded pixel area.
+
+5. Decals:
+   - Support efficient mesh decals or clipped decal geometry where possible.
+   - Avoid forcing a full prepass only to support projected decals.
+   - Provide projected decals as a fallback, not as the only path.
+
+6. Shadows:
+   - Implement cached shadow maps for static or mostly static lights.
+   - Use conventional shadow atlases, stable cascades, and per-light caching before considering complex virtual shadow methods.
+   - Exclude floors or other low-value receivers from expensive shadow passes when safe.
+   - Use stencil, scissor, tile, or light-volume restrictions to reduce shadow projection cost.
+   - Avoid noise-dependent shadows that require blurry TAA to look acceptable.
+   - Provide debug views for shadow caster cost, receiver cost, cache invalidation, atlas occupancy, and per-light timing.
+
+7. Direct and indirect lighting:
+   - Use a physically plausible lighting model; avoid Lambert-only diffuse as the default for realistic materials.
+   - Implement Burley diffuse or another higher-quality diffuse model where appropriate.
+   - Support tiled, clustered, or light-volume deferred lighting and compare performance.
+   - Implement scalable ambient occlusion that is stable, depth-aware, and not destructively noisy.
+   - For GI, prioritize stability, low smear, and graceful fallback over noisy full-scene tracing.
+
+8. Reflections and ray tracing:
+   - Implement a reflection stack:
+     - Screen space reflections first for visible on-screen detail.
+     - Compute-shader/software ray tracing for world-space fallback.
+     - Optional hardware RT path only as an enhancement.
+     - Cubemaps only as a low-priority fallback for rough or distant surfaces.
+   - Trace at adaptive resolution, commonly half resolution or checkerboard-like coverage when needed.
+   - Use blue-noise or carefully designed sampling where it improves convergence.
+   - Use temporal reconstruction with strong rejection, motion vectors, roughness awareness, and depth/normal validation.
+   - Represent large world-space occluders in a simplified acceleration structure.
+   - Use simplified vertex-colored proxy geometry for reflection tracing where possible.
+   - Include emissive objects in world-space reflection representation even when small.
+   - Support special handling for glass and transparent reflections, including separate interior/exterior reflection layers if useful.
+
+9. Anti-aliasing and reconstruction:
+   - Implement SMAA and SMAA T2x as primary low-cost options.
+   - Explore a modern SMAA 4x-like hybrid using 2x MSAA plus temporal reprojection.
+   - Support MSAA in deferred/hybrid paths with correct sample-frequency shading where needed.
+   - Resolve MSAA with proper edge masks, linear blending, and correct handling of AO/specular/subsample data.
+   - Add specular anti-aliasing through filtered mipmaps, normal filtering, roughness adjustment, and material authoring rules.
+   - Avoid temporal AA that smears particles, lighting, faces, thin geometry, or camera motion.
+
+10. Post-processing:
+   - Use motion blur only when high quality and natural; make it optional.
+   - Keep bloom, depth of field, fog, film grain, chromatic aberration, sharpening, and color grading modular.
+   - Avoid forced sharpening that creates halos or worsens aliasing.
+   - Prefer stable blue-noise patterns over obvious interleaved gradient noise in fog or volumetrics.
+   - Ensure post effects do not corrupt alpha, motion, or temporal history buffers.
+
+11. Debugging and profiling:
+   - Provide frame graph visualization.
+   - Provide GPU timestamp scopes for every pass.
+   - Provide per-draw and per-material cost views.
+   - Provide overdraw heatmaps that distinguish hardware raster, compute raster, masked overdraw, and material overdraw.
+   - Provide G-buffer, depth, normals, motion vectors, shadow atlas, Hi-Z, SSR, RT, lighting, AO, AA, and history debug views.
+   - Provide warnings for expensive materials, excessive texture fetches, sub-pixel triangles, unstable temporal history, unnecessary clears/copies, and poor shadow cache behavior.
+
+Performance Targets
+
+Design the engine around these rough frame-budget goals at 1080p on a mid-range GPU:
+
+- Geometry and base pass: 2.0 to 4.0 ms depending on scene complexity.
+- Shadows: below 1.5 ms for common scenes, with caching for static lights.
+- Reflections: 1.0 to 2.5 ms depending on quality tier.
+- AO/GI: scalable, stable, and preferably below 2.0 ms at performance settings.
+- Anti-aliasing: preferably below 1.0 ms for the default path.
+- Post-processing: below 1.5 ms unless cinematic quality is requested.
+- Total GPU frame: target 16.6 ms or less for 60 FPS, with quality tiers for 8.3 ms and 11.1 ms targets.
+
+Implementation Deliverables
+
+Produce:
+
+1. A complete renderer architecture document.
+2. A frame graph showing all passes, inputs, outputs, and resource lifetimes.
+3. Data structures for scene objects, lights, materials, render targets, acceleration structures, and temporal history.
+4. Pseudocode or real code for:
+   - Partial depth prepass.
+   - G-buffer/base pass.
+   - Hi-Z generation.
+   - Light culling.
+   - Shadow caching and projection.
+   - SSR.
+   - Compute-shader/software ray traced reflections.
+   - Temporal reflection reconstruction.
+   - SMAA/SMAA T2x or MSAA hybrid resolve.
+   - Debug view generation.
+5. A scalability system with Low, Medium, High, and Cinematic settings.
+6. A profiling and validation checklist.
+
+Important Constraints
+
+- Do not design around heavy TAA as a universal fix.
+- Do not require hardware RT.
+- Do not require Nanite-style micropolygon rendering.
+- Do not require virtual shadow maps.
+- Do not require stochastic virtual textures.
+- Do not hide artifacts with blur, grain, chromatic aberration, or aggressive sharpening.
+- Do not accept features without clear debug views and measurable frame cost.
+
+Final Output Style
+
+When answering, be concrete and engineering-focused. Give the architecture first, then the pipeline, then the data structures, then pseudocode, then optimization/debug tooling. Explain tradeoffs clearly and include fallback paths for weaker hardware.
