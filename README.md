@@ -21,12 +21,12 @@ DHOOL_GPU=AMD cargo run --release -- --live
 DHOOL_GPU=NVIDIA cargo run --release -- --live
 ```
 
-The GPU frame executes a cached 2048px directional shadow map with 3x3 PCF, a
-vertex-only partial depth prepass, hardware depth-tested PBR G-buffer rasterization,
-a 70%-resolution WGSL compute reflection pass, fullscreen deferred lighting,
-atmosphere, bloom, rain, GT tone mapping, and a final SMAA T2x-style edge/persistence
-resolve. Materials use mipmapped base-color, tangent-space normal, and packed
-AO/roughness/metallic maps.
+The GPU frame executes a cached 4096px directional shadow map with normal-biased
+5x5 PCF, a vertex-only partial depth prepass, hardware depth-tested PBR G-buffer
+rasterization, a 70%-resolution WGSL compute reflection pass, fullscreen deferred
+lighting with screen-space occlusion, procedural world-space 3D rain, procedural
+wet surfaces/puddles, GT tone mapping, and a final SMAA T2x-style edge/persistence resolve. Materials use
+mipmapped base-color, tangent-space normal, and packed AO/roughness/metallic maps.
 
 ![Rainy industrial live GPU scene](demo-output/aaa-live.png)
 

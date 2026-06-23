@@ -408,6 +408,26 @@ impl World {
                         .unwrap_or(Vec3::ZERO);
                     LightKind::Local { position, radius }
                 }
+                LightKind::Spot {
+                    direction,
+                    radius,
+                    inner_angle_radians,
+                    outer_angle_radians,
+                    ..
+                } => {
+                    let position = self
+                        .transforms
+                        .get(entity)
+                        .map(|t| t.position)
+                        .unwrap_or(Vec3::ZERO);
+                    LightKind::Spot {
+                        position,
+                        direction,
+                        radius,
+                        inner_angle_radians,
+                        outer_angle_radians,
+                    }
+                }
             };
             lights.push(Light {
                 name: "world_light",
@@ -464,6 +484,7 @@ impl World {
             let position = match light.kind {
                 LightKind::Directional { .. } => Vec3::ZERO,
                 LightKind::Local { position, .. } => position,
+                LightKind::Spot { position, .. } => position,
             };
             let entity = world.spawn(light.name, Transform::from_position(position));
             world.set_light(

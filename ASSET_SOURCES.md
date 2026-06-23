@@ -25,3 +25,13 @@ The live renderer's industrial alley uses these Poly Haven assets at 1K:
 The downloaded glTF models retain their base-color, tangent-space normal, and packed
 ambient-occlusion/roughness/metallic textures. The files are vendored under
 `assets/aaa` so the scene is deterministic and works offline.
+
+## Rain and Wetness
+
+The live renderer does not sample 2D rain textures. Rain streaks are generated as
+world-space depth-tested geometry in `src/shaders/rain3d.wgsl`; floor impacts,
+puddles, object wetness, and wall runoff are generated procedurally from world
+position, normals, time, and scene lighting in `src/shaders/lighting.wgsl`.
+
+Older checkouts may contain OpenGameArt rain overlay/ripple images under
+`assets/aaa/rain`, but the current live path does not bind or sample them.

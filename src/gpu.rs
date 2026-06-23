@@ -1,5 +1,7 @@
 use crate::math::{Vec3, Vec4};
-use crate::scene::{build_aaa_scene, build_asset_showcase, Material, RenderScene, TextureImage};
+use crate::scene::{
+    build_aaa_scene, build_asset_showcase, LightKind, Material, RenderScene, TextureImage,
+};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3 as GpuVec3};
 use std::fmt;
@@ -20,8 +22,16 @@ const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PBR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const REFLECTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const CAMERA_MOVE_SPEED: f32 = 4.0;
 const CAMERA_LOOK_SPEED: f32 = 1.55;
+const RAIN_DROP_COUNT: u32 = 4_096;
+const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
+const MAX_GPU_POINT_LIGHTS: usize = 4;
+const SHADOW_MAP_RESOLUTION: u32 = 4_096;
+const LOCAL_SHADOW_MAP_RESOLUTION: u32 = 1_024;
+const BLOOM_SCALE: u32 = 4;
+const EMISSIVE_SCALE: f32 = 12.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveOptions {
@@ -127,7 +137,7 @@ impl ApplicationHandler for LiveApplication {
             renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type
         );
         println!(
-            "live pipeline: shadow map -> depth prepass/PBR G-buffer -> compute reflections -> deferred GT resolve -> SMAA T2x"
+            "live pipeline: shadow maps -> depth prepass/PBR G-buffer -> compute reflections -> HDR lighting/rain -> Kawase bloom + GT resolve -> SMAA T2x"
         );
         window.set_title(&format!(
             "Dhool Pro | {} | vendor-agnostic compute",
@@ -194,7 +204,7 @@ impl ApplicationHandler for LiveApplication {
                 if elapsed >= Duration::from_secs(1) {
                     let fps = self.title_frames as f64 / elapsed.as_secs_f64();
                     window.set_title(&format!(
-                        "Dhool Pro | {} | {:.0} FPS | compute RT + SMAA T2x",
+                        "Dhool Pro | {} | {:.0} FPS | compute RT + HDR bloom + 3D rain + SMAA T2x",
                         renderer.adapter.name, fps
                     ));
                     self.title_clock = Instant::now();
@@ -258,6 +268,7 @@ struct CameraUniform {
 struct MaterialUniform {
     base_color: [f32; 4],
     surface: [f32; 4],
+    emission: [f32; 4],
 }
 
 #[repr(C)]
@@ -273,6 +284,121 @@ struct AaUniform {
     previous_view_projection: [[f32; 4]; 4],
     viewport: [f32; 4],
     params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct LightUniform {
+    directional_direction_count: [f32; 4],
+    directional_color_intensity: [f32; 4],
+    ambient: [f32; 4],
+    sky: [f32; 4],
+    weather: [f32; 4],
+    local_position_radius: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
+    local_color_intensity: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
+    local_direction_outer: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
+    local_inner_shadow: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
+}
+
+impl LightUniform {
+    fn from_scene(scene: &RenderScene) -> Self {
+        let mut uniform = Self {
+            ambient: [
+                scene.ambient_color.r,
+                scene.ambient_color.g,
+                scene.ambient_color.b,
+                1.0,
+            ],
+            sky: [scene.sky_color.r, scene.sky_color.g, scene.sky_color.b, 1.0],
+            weather: [1.0, 1.0, 0.18, 0.0],
+            ..Self::zeroed()
+        };
+        let mut local_count = 0_usize;
+        for light in &scene.lights {
+            match light.kind {
+                LightKind::Directional { direction }
+                    if uniform.directional_color_intensity[3] == 0.0 =>
+                {
+                    let surface_to_light =
+                        GpuVec3::new(-direction.x, -direction.y, -direction.z).normalize_or_zero();
+                    uniform.directional_direction_count = [
+                        surface_to_light.x,
+                        surface_to_light.y,
+                        surface_to_light.z,
+                        0.0,
+                    ];
+                    uniform.directional_color_intensity =
+                        [light.color.r, light.color.g, light.color.b, light.intensity];
+                }
+                LightKind::Local { position, radius } if local_count < MAX_GPU_POINT_LIGHTS => {
+                    uniform.local_position_radius[local_count] =
+                        [position.x, position.y, position.z, radius];
+                    uniform.local_color_intensity[local_count] =
+                        [light.color.r, light.color.g, light.color.b, light.intensity];
+                    local_count += 1;
+                }
+                LightKind::Spot {
+                    position,
+                    direction,
+                    radius,
+                    inner_angle_radians,
+                    outer_angle_radians,
+                } if local_count < MAX_GPU_POINT_LIGHTS => {
+                    let direction =
+                        GpuVec3::new(direction.x, direction.y, direction.z).normalize_or_zero();
+                    uniform.local_position_radius[local_count] =
+                        [position.x, position.y, position.z, radius];
+                    uniform.local_color_intensity[local_count] =
+                        [light.color.r, light.color.g, light.color.b, light.intensity];
+                    uniform.local_direction_outer[local_count] = [
+                        direction.x,
+                        direction.y,
+                        direction.z,
+                        outer_angle_radians.cos(),
+                    ];
+                    uniform.local_inner_shadow[local_count] = [
+                        inner_angle_radians.cos(),
+                        if light.casts_shadow { 1.0 } else { 0.0 },
+                        local_count as f32,
+                        1.0,
+                    ];
+                    local_count += 1;
+                }
+                _ => {}
+            }
+        }
+        uniform.directional_direction_count[3] = local_count as f32;
+        uniform
+    }
+
+    fn realtime(mut self, elapsed: f32) -> Self {
+        self.weather = [1.0, 1.0, 0.18 + elapsed.sin() * 0.025, elapsed];
+        let moon_flicker = 0.96 + (elapsed * 0.17).sin() * 0.025;
+        self.directional_color_intensity[3] *= moon_flicker;
+        let local_count =
+            self.directional_direction_count[3].clamp(0.0, MAX_GPU_POINT_LIGHTS as f32) as usize;
+        for light_index in 0..local_count {
+            let phase = elapsed * (7.0 + light_index as f32 * 2.35) + light_index as f32 * 1.71;
+            let flicker = 0.88 + phase.sin() * 0.08 + (phase * 2.13).sin() * 0.035;
+            self.local_color_intensity[light_index][3] *= flicker.clamp(0.72, 1.12);
+        }
+        self
+    }
+
+    fn surface_to_directional_light(self) -> GpuVec3 {
+        GpuVec3::new(
+            self.directional_direction_count[0],
+            self.directional_direction_count[1],
+            self.directional_direction_count[2],
+        )
+        .normalize_or_zero()
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct LocalShadowUniform {
+    view_projection: [[[f32; 4]; 4]; MAX_GPU_POINT_LIGHTS],
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -346,12 +472,27 @@ struct GpuMaterial {
     bind_group: wgpu::BindGroup,
 }
 
+struct RainTextures {
+    bind_group: wgpu::BindGroup,
+}
+
+struct RainPassResources<'a> {
+    camera_buffer: &'a wgpu::Buffer,
+    light_buffer: &'a wgpu::Buffer,
+    shadow_view: &'a wgpu::TextureView,
+    shadow_sampler: &'a wgpu::Sampler,
+    shadow_camera_buffer: &'a wgpu::Buffer,
+}
+
 struct GBuffer {
     _albedo: wgpu::Texture,
     _normal: wgpu::Texture,
     _pbr: wgpu::Texture,
     _depth: wgpu::Texture,
     _reflection: wgpu::Texture,
+    _lighting_hdr: wgpu::Texture,
+    _bloom_a: wgpu::Texture,
+    _bloom_b: wgpu::Texture,
     _tone_mapped: wgpu::Texture,
     _aa_history_a: wgpu::Texture,
     _aa_history_b: wgpu::Texture,
@@ -359,11 +500,18 @@ struct GBuffer {
     normal: wgpu::TextureView,
     pbr: wgpu::TextureView,
     depth: wgpu::TextureView,
+    lighting_hdr: wgpu::TextureView,
+    bloom_a: wgpu::TextureView,
+    bloom_b: wgpu::TextureView,
     tone_mapped: wgpu::TextureView,
     aa_history_a: wgpu::TextureView,
     aa_history_b: wgpu::TextureView,
     reflection_bind_group: wgpu::BindGroup,
     lighting_bind_group: wgpu::BindGroup,
+    bloom_extract_bind_group: wgpu::BindGroup,
+    bloom_blur_a_bind_group: wgpu::BindGroup,
+    bloom_blur_b_bind_group: wgpu::BindGroup,
+    tonemap_bind_group: wgpu::BindGroup,
     aa_bind_group_a: wgpu::BindGroup,
     aa_bind_group_b: wgpu::BindGroup,
     reflection_width: u32,
@@ -384,21 +532,38 @@ struct GpuRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     frame_buffer: wgpu::Buffer,
+    light_buffer: wgpu::Buffer,
     aa_buffer: wgpu::Buffer,
     shadow_camera_buffer: wgpu::Buffer,
     shadow_camera_bind_group: wgpu::BindGroup,
     _shadow_texture: wgpu::Texture,
     shadow_view: wgpu::TextureView,
     shadow_sampler: wgpu::Sampler,
+    local_shadow_buffer: wgpu::Buffer,
+    _local_shadow_texture: wgpu::Texture,
+    local_shadow_array_view: wgpu::TextureView,
+    local_shadow_views: Vec<wgpu::TextureView>,
+    _local_shadow_camera_buffers: Vec<wgpu::Buffer>,
+    local_shadow_bind_groups: Vec<wgpu::BindGroup>,
+    shadowed_local_light_indices: Vec<usize>,
     depth_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     geometry_pipeline: wgpu::RenderPipeline,
     reflection_pipeline: wgpu::ComputePipeline,
     lighting_pipeline: wgpu::RenderPipeline,
+    bloom_extract_pipeline: wgpu::RenderPipeline,
+    bloom_blur_horizontal_pipeline: wgpu::RenderPipeline,
+    bloom_blur_vertical_pipeline: wgpu::RenderPipeline,
+    tonemap_pipeline: wgpu::RenderPipeline,
     aa_pipeline: wgpu::RenderPipeline,
+    rain_pipeline: wgpu::RenderPipeline,
+    rain: RainTextures,
     reflection_layout: wgpu::BindGroupLayout,
     lighting_layout: wgpu::BindGroupLayout,
+    bloom_layout: wgpu::BindGroupLayout,
+    tonemap_layout: wgpu::BindGroupLayout,
     aa_layout: wgpu::BindGroupLayout,
+    bloom_format: wgpu::TextureFormat,
     gbuffer: GBuffer,
     started: Instant,
     last_update: Instant,
@@ -409,6 +574,7 @@ struct GpuRenderer {
     camera_origin: GpuVec3,
     camera_target: GpuVec3,
     keys: CameraKeys,
+    base_light_uniform: LightUniform,
 }
 
 enum RenderResult {
@@ -445,8 +611,18 @@ impl GpuRenderer {
             .map_err(|error| LiveError::Surface(error.to_string()))?;
         let adapter = select_adapter(&instance, &surface).await?;
         let adapter_info = adapter.get_info();
+        let optional_features = wgpu::Features::RG11B10UFLOAT_RENDERABLE;
+        let required_features = adapter.features() & optional_features;
+        let bloom_format = if required_features.contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE) {
+            wgpu::TextureFormat::Rg11b10Ufloat
+        } else {
+            HDR_FORMAT
+        };
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features,
+                ..wgpu::DeviceDescriptor::default()
+            })
             .await
             .map_err(|error| LiveError::Device(error.to_string()))?;
         let mut config = surface
@@ -462,7 +638,10 @@ impl GpuRenderer {
         let material_layout = material_layout(&device);
         let reflection_layout = reflection_layout(&device);
         let lighting_layout = lighting_layout(&device);
+        let bloom_layout = bloom_layout(&device);
+        let tonemap_layout = tonemap_layout(&device);
         let aa_layout = aa_layout(&device);
+        let rain_layout = rain_layout(&device);
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera-uniform"),
@@ -487,17 +666,14 @@ impl GpuRenderer {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
-        let light_eye = GpuVec3::new(12.0, 19.0, 8.0);
-        let light_target = GpuVec3::new(0.0, 0.0, -6.0);
-        let light_view = Mat4::look_at_rh(light_eye, light_target, GpuVec3::Y);
-        let light_projection = Mat4::orthographic_rh(-17.0, 17.0, -17.0, 17.0, 0.1, 55.0);
-        let light_view_projection = light_projection * light_view;
-        let shadow_camera = CameraUniform {
-            view_projection: light_view_projection.to_cols_array_2d(),
-            inverse_view_projection: light_view_projection.inverse().to_cols_array_2d(),
-            position_time: [light_eye.x, light_eye.y, light_eye.z, 0.0],
-            viewport: [2048.0, 2048.0, 1.0 / 2048.0, 1.0 / 2048.0],
-        };
+        let (vertices, indices, batches) = flatten_scene(&scene);
+        let light_uniform = LightUniform::from_scene(&scene);
+        let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("scene-light-uniform"),
+            contents: bytemuck::bytes_of(&light_uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let shadow_camera = shadow_camera_for_scene(light_uniform, &vertices);
         let shadow_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("shadow-camera-uniform"),
             contents: bytemuck::bytes_of(&shadow_camera),
@@ -511,9 +687,35 @@ impl GpuRenderer {
                 resource: shadow_camera_buffer.as_entire_binding(),
             }],
         });
-        let (shadow_texture, shadow_view, shadow_sampler) = create_shadow_map(&device, 2048);
-
-        let (vertices, indices, batches) = flatten_scene(&scene);
+        let (shadow_texture, shadow_view, shadow_sampler) =
+            create_shadow_map(&device, SHADOW_MAP_RESOLUTION);
+        let local_shadow_setup = local_shadow_setup_for_scene(&scene);
+        let local_shadow_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("local-shadow-matrices"),
+            contents: bytemuck::bytes_of(&local_shadow_setup.uniform),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let (local_shadow_texture, local_shadow_array_view, local_shadow_views) =
+            create_local_shadow_map_array(&device, LOCAL_SHADOW_MAP_RESOLUTION);
+        let mut local_shadow_camera_buffers = Vec::with_capacity(MAX_GPU_POINT_LIGHTS);
+        let mut local_shadow_bind_groups = Vec::with_capacity(MAX_GPU_POINT_LIGHTS);
+        for camera in local_shadow_setup.cameras {
+            let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("local-shadow-camera-uniform"),
+                contents: bytemuck::bytes_of(&camera),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("local-shadow-camera-bind-group"),
+                layout: &camera_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                }],
+            });
+            local_shadow_camera_buffers.push(camera_buffer);
+            local_shadow_bind_groups.push(bind_group);
+        }
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene-vertices"),
             contents: bytemuck::cast_slice(&vertices),
@@ -529,21 +731,40 @@ impl GpuRenderer {
             .iter()
             .map(|material| create_material(&device, &queue, &material_layout, material))
             .collect();
+        let rain_resources = RainPassResources {
+            camera_buffer: &camera_buffer,
+            light_buffer: &light_buffer,
+            shadow_view: &shadow_view,
+            shadow_sampler: &shadow_sampler,
+            shadow_camera_buffer: &shadow_camera_buffer,
+        };
+        let rain = create_rain_resources(&device, &rain_layout, rain_resources);
 
         let depth_pipeline = create_depth_pipeline(&device, &camera_layout);
         let shadow_pipeline = create_shadow_pipeline(&device, &camera_layout);
         let geometry_pipeline =
             create_geometry_pipeline(&device, &camera_layout, &material_layout, config.format);
         let reflection_pipeline = create_reflection_pipeline(&device, &reflection_layout);
-        let lighting_pipeline = create_lighting_pipeline(&device, &lighting_layout, config.format);
+        let lighting_pipeline = create_lighting_pipeline(&device, &lighting_layout);
+        let bloom_extract_pipeline =
+            create_bloom_pipeline(&device, &bloom_layout, bloom_format, "fs_extract");
+        let bloom_blur_horizontal_pipeline =
+            create_bloom_pipeline(&device, &bloom_layout, bloom_format, "fs_blur_horizontal");
+        let bloom_blur_vertical_pipeline =
+            create_bloom_pipeline(&device, &bloom_layout, bloom_format, "fs_blur_vertical");
+        let tonemap_pipeline = create_tonemap_pipeline(&device, &tonemap_layout, config.format);
+        let rain_pipeline = create_rain_pipeline(&device, &rain_layout, HDR_FORMAT);
         let aa_pipeline = create_aa_pipeline(&device, &aa_layout, config.format);
         let gbuffer = GBuffer::new(
             &device,
             config.width,
             config.height,
             config.format,
+            bloom_format,
             &reflection_layout,
             &lighting_layout,
+            &bloom_layout,
+            &tonemap_layout,
             &aa_layout,
             &frame_buffer,
             &camera_buffer,
@@ -551,6 +772,9 @@ impl GpuRenderer {
             &shadow_view,
             &shadow_sampler,
             &shadow_camera_buffer,
+            &light_buffer,
+            &local_shadow_array_view,
+            &local_shadow_buffer,
         );
 
         Ok(Self {
@@ -568,20 +792,37 @@ impl GpuRenderer {
             camera_bind_group,
             frame_buffer,
             aa_buffer,
+            light_buffer,
             shadow_camera_buffer,
             shadow_camera_bind_group,
             _shadow_texture: shadow_texture,
             shadow_view,
             shadow_sampler,
+            local_shadow_buffer,
+            _local_shadow_texture: local_shadow_texture,
+            local_shadow_array_view,
+            local_shadow_views,
+            _local_shadow_camera_buffers: local_shadow_camera_buffers,
+            local_shadow_bind_groups,
+            shadowed_local_light_indices: local_shadow_setup.shadowed_indices,
             depth_pipeline,
             shadow_pipeline,
             geometry_pipeline,
             reflection_pipeline,
             lighting_pipeline,
+            bloom_extract_pipeline,
+            bloom_blur_horizontal_pipeline,
+            bloom_blur_vertical_pipeline,
+            tonemap_pipeline,
             aa_pipeline,
+            rain_pipeline,
+            rain,
             reflection_layout,
             lighting_layout,
+            bloom_layout,
+            tonemap_layout,
             aa_layout,
+            bloom_format,
             gbuffer,
             started: Instant::now(),
             last_update: Instant::now(),
@@ -592,6 +833,7 @@ impl GpuRenderer {
             camera_origin,
             camera_target,
             keys: CameraKeys::default(),
+            base_light_uniform: light_uniform,
         })
     }
 
@@ -608,8 +850,11 @@ impl GpuRenderer {
             size.width,
             size.height,
             self.config.format,
+            self.bloom_format,
             &self.reflection_layout,
             &self.lighting_layout,
+            &self.bloom_layout,
+            &self.tonemap_layout,
             &self.aa_layout,
             &self.frame_buffer,
             &self.camera_buffer,
@@ -617,6 +862,9 @@ impl GpuRenderer {
             &self.shadow_view,
             &self.shadow_sampler,
             &self.shadow_camera_buffer,
+            &self.light_buffer,
+            &self.local_shadow_array_view,
+            &self.local_shadow_buffer,
         );
     }
 
@@ -755,12 +1003,15 @@ impl GpuRenderer {
                 0.0,
             ],
         };
+        let lights = self.base_light_uniform.realtime(elapsed);
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera));
         self.queue
             .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame));
         self.queue
             .write_buffer(&self.aa_buffer, 0, bytemuck::bytes_of(&aa));
+        self.queue
+            .write_buffer(&self.light_buffer, 0, bytemuck::bytes_of(&lights));
     }
 
     fn render(&mut self) -> RenderResult {
@@ -804,6 +1055,39 @@ impl GpuRenderer {
             });
             pass.set_pipeline(&self.shadow_pipeline);
             pass.set_bind_group(0, &self.shadow_camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for batch in &self.batches {
+                if batch.casts_shadow {
+                    pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                }
+            }
+        }
+
+        for &light_index in &self.shadowed_local_light_indices {
+            let Some(view) = self.local_shadow_views.get(light_index) else {
+                continue;
+            };
+            let Some(bind_group) = self.local_shadow_bind_groups.get(light_index) else {
+                continue;
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cached-local-shadow-map"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.shadow_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             for batch in &self.batches {
@@ -895,6 +1179,128 @@ impl GpuRenderer {
 
         {
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &self.gbuffer.lighting_hdr,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("hdr-deferred-lighting"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.lighting_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.lighting_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &self.gbuffer.lighting_hdr,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("world-space-depth-tested-rain"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.gbuffer.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.rain_pipeline);
+            pass.set_bind_group(0, &self.rain.bind_group, &[]);
+            pass.draw(0..RAIN_PRISM_VERTEX_COUNT, 0..RAIN_DROP_COUNT);
+        }
+
+        {
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &self.gbuffer.bloom_a,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("kawase-bloom-extract"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.bloom_extract_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.bloom_extract_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &self.gbuffer.bloom_b,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("kawase-bloom-horizontal"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.bloom_blur_horizontal_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.bloom_blur_a_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &self.gbuffer.bloom_a,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("kawase-bloom-vertical"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.bloom_blur_vertical_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.bloom_blur_b_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &self.gbuffer.tone_mapped,
                 depth_slice: None,
                 resolve_target: None,
@@ -904,15 +1310,15 @@ impl GpuRenderer {
                 },
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("gt-tonemap-color-resolve"),
+                label: Some("gt-tonemap-bloom-resolve"),
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.lighting_pipeline);
-            pass.set_bind_group(0, &self.gbuffer.lighting_bind_group, &[]);
+            pass.set_pipeline(&self.tonemap_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.tonemap_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -969,8 +1375,11 @@ impl GBuffer {
         width: u32,
         height: u32,
         surface_format: wgpu::TextureFormat,
+        bloom_format: wgpu::TextureFormat,
         reflection_layout: &wgpu::BindGroupLayout,
         lighting_layout: &wgpu::BindGroupLayout,
+        bloom_layout: &wgpu::BindGroupLayout,
+        tonemap_layout: &wgpu::BindGroupLayout,
         aa_layout: &wgpu::BindGroupLayout,
         frame_buffer: &wgpu::Buffer,
         camera_buffer: &wgpu::Buffer,
@@ -978,6 +1387,9 @@ impl GBuffer {
         shadow_view: &wgpu::TextureView,
         shadow_sampler: &wgpu::Sampler,
         shadow_camera_buffer: &wgpu::Buffer,
+        light_buffer: &wgpu::Buffer,
+        local_shadow_view: &wgpu::TextureView,
+        local_shadow_buffer: &wgpu::Buffer,
     ) -> Self {
         let (albedo_texture, albedo) =
             render_texture(device, "gbuffer-albedo", width, height, ALBEDO_FORMAT);
@@ -986,6 +1398,24 @@ impl GBuffer {
         let (pbr_texture, pbr) =
             render_texture(device, "gbuffer-pbr-material", width, height, PBR_FORMAT);
         let (depth_texture, depth) = depth_texture(device, width, height);
+        let (lighting_texture, lighting_hdr) =
+            render_texture(device, "hdr-lighting-rgba16f", width, height, HDR_FORMAT);
+        let bloom_width = width.div_ceil(BLOOM_SCALE).max(1);
+        let bloom_height = height.div_ceil(BLOOM_SCALE).max(1);
+        let (bloom_texture_a, bloom_a) = render_texture(
+            device,
+            "kawase-bloom-a",
+            bloom_width,
+            bloom_height,
+            bloom_format,
+        );
+        let (bloom_texture_b, bloom_b) = render_texture(
+            device,
+            "kawase-bloom-b",
+            bloom_width,
+            bloom_height,
+            bloom_format,
+        );
         let (tone_texture, tone_mapped) =
             render_texture(device, "tone-mapped-rgb10a2", width, height, surface_format);
         let (history_texture_a, aa_history_a) =
@@ -1021,6 +1451,14 @@ impl GBuffer {
                     binding: 4,
                     resource: frame_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: light_buffer.as_entire_binding(),
+                },
             ],
         });
         let lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1045,7 +1483,36 @@ impl GBuffer {
                     binding: 8,
                     resource: shadow_camera_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: light_buffer.as_entire_binding(),
+                },
+                texture_entry(10, local_shadow_view),
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: local_shadow_buffer.as_entire_binding(),
+                },
             ],
+        });
+        let bloom_extract_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bloom-extract-bind-group"),
+            layout: bloom_layout,
+            entries: &[texture_entry(0, &lighting_hdr)],
+        });
+        let bloom_blur_a_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bloom-blur-a-bind-group"),
+            layout: bloom_layout,
+            entries: &[texture_entry(0, &bloom_a)],
+        });
+        let bloom_blur_b_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bloom-blur-b-bind-group"),
+            layout: bloom_layout,
+            entries: &[texture_entry(0, &bloom_b)],
+        });
+        let tonemap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tonemap-bind-group"),
+            layout: tonemap_layout,
+            entries: &[texture_entry(0, &lighting_hdr), texture_entry(1, &bloom_a)],
         });
         let aa_bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("smaa-t2x-bind-group-history-a"),
@@ -1087,6 +1554,9 @@ impl GBuffer {
             _pbr: pbr_texture,
             _depth: depth_texture,
             _reflection: reflection_texture,
+            _lighting_hdr: lighting_texture,
+            _bloom_a: bloom_texture_a,
+            _bloom_b: bloom_texture_b,
             _tone_mapped: tone_texture,
             _aa_history_a: history_texture_a,
             _aa_history_b: history_texture_b,
@@ -1094,11 +1564,18 @@ impl GBuffer {
             normal,
             pbr,
             depth,
+            lighting_hdr,
+            bloom_a,
+            bloom_b,
             tone_mapped,
             aa_history_a,
             aa_history_b,
             reflection_bind_group,
             lighting_bind_group,
+            bloom_extract_bind_group,
+            bloom_blur_a_bind_group,
+            bloom_blur_b_bind_group,
+            tonemap_bind_group,
             aa_bind_group_a,
             aa_bind_group_b,
             reflection_width,
@@ -1198,12 +1675,137 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
     (vertices, indices, batches)
 }
 
+fn shadow_camera_for_scene(lights: LightUniform, vertices: &[GpuVertex]) -> CameraUniform {
+    let surface_to_light = lights.surface_to_directional_light();
+    let surface_to_light = if surface_to_light.length_squared() > 0.0 {
+        surface_to_light
+    } else {
+        GpuVec3::new(0.35, 0.75, 0.45).normalize()
+    };
+    let mut min = GpuVec3::splat(f32::INFINITY);
+    let mut max = GpuVec3::splat(f32::NEG_INFINITY);
+    for vertex in vertices {
+        let position = GpuVec3::from_array(vertex.position);
+        min = min.min(position);
+        max = max.max(position);
+    }
+    if vertices.is_empty() {
+        min = GpuVec3::new(-8.0, -1.0, -18.0);
+        max = GpuVec3::new(8.0, 6.0, 6.0);
+    }
+    let center = (min + max) * 0.5;
+    let radius = ((max - min).length() * 0.55).max(8.0);
+    let eye = center + surface_to_light * (radius * 2.4);
+    let view = Mat4::look_at_rh(eye, center, GpuVec3::Y);
+    let projection = Mat4::orthographic_rh(-radius, radius, -radius, radius, 0.1, radius * 4.8);
+    let view_projection = projection * view;
+    CameraUniform {
+        view_projection: view_projection.to_cols_array_2d(),
+        inverse_view_projection: view_projection.inverse().to_cols_array_2d(),
+        position_time: [eye.x, eye.y, eye.z, 0.0],
+        viewport: [
+            SHADOW_MAP_RESOLUTION as f32,
+            SHADOW_MAP_RESOLUTION as f32,
+            1.0 / SHADOW_MAP_RESOLUTION as f32,
+            1.0 / SHADOW_MAP_RESOLUTION as f32,
+        ],
+    }
+}
+
+struct LocalShadowSetup {
+    uniform: LocalShadowUniform,
+    cameras: [CameraUniform; MAX_GPU_POINT_LIGHTS],
+    shadowed_indices: Vec<usize>,
+}
+
+fn local_shadow_setup_for_scene(scene: &RenderScene) -> LocalShadowSetup {
+    let mut uniform = LocalShadowUniform::zeroed();
+    let mut cameras = [CameraUniform::zeroed(); MAX_GPU_POINT_LIGHTS];
+    let mut shadowed_indices = Vec::new();
+    let mut local_index = 0_usize;
+
+    for light in &scene.lights {
+        match light.kind {
+            LightKind::Directional { .. } => {}
+            LightKind::Local { .. } => {
+                local_index += 1;
+            }
+            LightKind::Spot {
+                position,
+                direction,
+                radius,
+                outer_angle_radians,
+                ..
+            } => {
+                if local_index < MAX_GPU_POINT_LIGHTS && light.casts_shadow {
+                    let camera =
+                        spot_shadow_camera(position, direction, radius, outer_angle_radians);
+                    uniform.view_projection[local_index] = camera.view_projection;
+                    cameras[local_index] = camera;
+                    shadowed_indices.push(local_index);
+                }
+                local_index += 1;
+            }
+        }
+
+        if local_index >= MAX_GPU_POINT_LIGHTS {
+            break;
+        }
+    }
+
+    LocalShadowSetup {
+        uniform,
+        cameras,
+        shadowed_indices,
+    }
+}
+
+fn spot_shadow_camera(
+    position: crate::math::Vec3,
+    direction: crate::math::Vec3,
+    radius: f32,
+    outer_angle_radians: f32,
+) -> CameraUniform {
+    let eye = GpuVec3::new(position.x, position.y, position.z);
+    let direction = GpuVec3::new(direction.x, direction.y, direction.z).normalize_or_zero();
+    let direction = if direction.length_squared() > 0.0 {
+        direction
+    } else {
+        -GpuVec3::Z
+    };
+    let up = if direction.dot(GpuVec3::Y).abs() > 0.92 {
+        GpuVec3::Z
+    } else {
+        GpuVec3::Y
+    };
+    let view = Mat4::look_at_rh(eye, eye + direction, up);
+    let fov = (outer_angle_radians * 2.0).clamp(20.0_f32.to_radians(), 135.0_f32.to_radians());
+    let projection = Mat4::perspective_rh(fov, 1.0, 0.05, radius.max(0.1));
+    let view_projection = projection * view;
+    CameraUniform {
+        view_projection: view_projection.to_cols_array_2d(),
+        inverse_view_projection: view_projection.inverse().to_cols_array_2d(),
+        position_time: [eye.x, eye.y, eye.z, 0.0],
+        viewport: [
+            LOCAL_SHADOW_MAP_RESOLUTION as f32,
+            LOCAL_SHADOW_MAP_RESOLUTION as f32,
+            1.0 / LOCAL_SHADOW_MAP_RESOLUTION as f32,
+            1.0 / LOCAL_SHADOW_MAP_RESOLUTION as f32,
+        ],
+    }
+}
+
 fn create_material(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     material: &Material,
 ) -> GpuMaterial {
+    let emission_strength = material
+        .emission
+        .r
+        .max(material.emission.g)
+        .max(material.emission.b);
     let uniform = MaterialUniform {
         base_color: [
             material.base_color.r,
@@ -1215,7 +1817,13 @@ fn create_material(
             material.roughness,
             material.metallic,
             material.cavity,
-            material.emission.luminance(),
+            emission_strength,
+        ],
+        emission: [
+            material.emission.r,
+            material.emission.g,
+            material.emission.b,
+            EMISSIVE_SCALE,
         ],
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1278,6 +1886,37 @@ fn create_material(
         _textures: vec![base_texture, normal_texture, pbr_texture],
         bind_group,
     }
+}
+
+fn create_rain_resources(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    resources: RainPassResources<'_>,
+) -> RainTextures {
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("world-space-rain-bind-group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: resources.camera_buffer.as_entire_binding(),
+            },
+            texture_entry(3, resources.shadow_view),
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(resources.shadow_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: resources.shadow_camera_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: resources.light_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    RainTextures { bind_group }
 }
 
 fn solid_texture(color: crate::math::Color) -> TextureImage {
@@ -1429,7 +2068,7 @@ fn create_shadow_pipeline(
             buffers: &[GpuVertex::layout()],
         },
         primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: Some(wgpu::Face::Front),
             ..wgpu::PrimitiveState::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -1438,8 +2077,8 @@ fn create_shadow_pipeline(
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState {
-                constant: 2,
-                slope_scale: 2.0,
+                constant: 1,
+                slope_scale: 1.25,
                 clamp: 0.0,
             },
         }),
@@ -1521,7 +2160,6 @@ fn create_reflection_pipeline(
 fn create_lighting_pipeline(
     device: &wgpu::Device,
     lighting_layout: &wgpu::BindGroupLayout,
-    surface_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/lighting.wgsl"));
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1530,7 +2168,76 @@ fn create_lighting_pipeline(
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("fullscreen-deferred-lighting-gt-tonemap"),
+        label: Some("fullscreen-deferred-hdr-lighting"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(color_target(HDR_FORMAT))],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_bloom_pipeline(
+    device: &wgpu::Device,
+    bloom_layout: &wgpu::BindGroupLayout,
+    bloom_format: wgpu::TextureFormat,
+    entry_point: &'static str,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/bloom.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("bloom-pipeline-layout"),
+        bind_group_layouts: &[Some(bloom_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("kawase-bloom-pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some(entry_point),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(color_target(bloom_format))],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_tonemap_pipeline(
+    device: &wgpu::Device,
+    tonemap_layout: &wgpu::BindGroupLayout,
+    surface_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/tonemap.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("tonemap-pipeline-layout"),
+        bind_group_layouts: &[Some(tonemap_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("gt-tonemap-bloom-pipeline"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -1546,6 +2253,50 @@ fn create_lighting_pipeline(
             entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(color_target(surface_format))],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_rain_pipeline(
+    device: &wgpu::Device,
+    rain_layout: &wgpu::BindGroupLayout,
+    surface_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/rain3d.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("world-space-rain-pipeline-layout"),
+        bind_group_layouts: &[Some(rain_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("world-space-depth-tested-rain-pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..wgpu::PrimitiveState::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(alpha_blend_target(surface_format))],
         }),
         multiview_mask: None,
         cache: None,
@@ -1625,6 +2376,8 @@ fn reflection_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 count: None,
             },
             uniform_entry(4, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(5, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(6, wgpu::ShaderStages::COMPUTE),
         ],
     })
 }
@@ -1647,6 +2400,29 @@ fn lighting_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 count: None,
             },
             uniform_entry(8, wgpu::ShaderStages::FRAGMENT),
+            uniform_entry(9, wgpu::ShaderStages::FRAGMENT),
+            depth_array_layout_entry(10, wgpu::ShaderStages::FRAGMENT),
+            uniform_entry(11, wgpu::ShaderStages::FRAGMENT),
+        ],
+    })
+}
+
+fn bloom_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("bloom-layout"),
+        entries: &[unfiltered_texture_layout_entry(
+            0,
+            wgpu::ShaderStages::FRAGMENT,
+        )],
+    })
+}
+
+fn tonemap_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("tonemap-layout"),
+        entries: &[
+            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::FRAGMENT),
+            unfiltered_texture_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
         ],
     })
 }
@@ -1660,6 +2436,24 @@ fn aa_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             depth_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
             uniform_entry(3, wgpu::ShaderStages::FRAGMENT),
             uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
+        ],
+    })
+}
+
+fn rain_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("world-space-rain-layout"),
+        entries: &[
+            uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            depth_layout_entry(3, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+            uniform_entry(5, wgpu::ShaderStages::FRAGMENT),
+            uniform_entry(6, wgpu::ShaderStages::VERTEX_FRAGMENT),
         ],
     })
 }
@@ -1722,6 +2516,22 @@ fn depth_layout_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::Bin
     }
 }
 
+fn depth_array_layout_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Depth,
+            view_dimension: wgpu::TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
 fn render_texture(
     device: &wgpu::Device,
     label: &str,
@@ -1775,7 +2585,7 @@ fn create_shadow_map(
     resolution: u32,
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("directional-shadow-map-2048"),
+        label: Some("directional-shadow-map"),
         size: wgpu::Extent3d {
             width: resolution,
             height: resolution,
@@ -1801,10 +2611,66 @@ fn create_shadow_map(
     (texture, view, sampler)
 }
 
+fn create_local_shadow_map_array(
+    device: &wgpu::Device,
+    resolution: u32,
+) -> (wgpu::Texture, wgpu::TextureView, Vec<wgpu::TextureView>) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("local-shadow-map-array"),
+        size: wgpu::Extent3d {
+            width: resolution,
+            height: resolution,
+            depth_or_array_layers: MAX_GPU_POINT_LIGHTS as u32,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let array_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("local-shadow-map-array-view"),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..wgpu::TextureViewDescriptor::default()
+    });
+    let layer_views = (0..MAX_GPU_POINT_LIGHTS)
+        .map(|layer| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("local-shadow-map-layer"),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer as u32,
+                array_layer_count: Some(1),
+                ..wgpu::TextureViewDescriptor::default()
+            })
+        })
+        .collect();
+    (texture, array_view, layer_views)
+}
+
 fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
         format,
         blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
+fn alpha_blend_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        }),
         write_mask: wgpu::ColorWrites::ALL,
     }
 }
@@ -1834,6 +2700,24 @@ fn texture_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_lights_populate_gpu_uniform() {
+        let scene = crate::scene::build_demo_scene();
+        let uniform = LightUniform::from_scene(&scene);
+        let expected_direction = GpuVec3::new(0.35, 0.75, 0.45).normalize();
+        let actual_direction = GpuVec3::new(
+            uniform.directional_direction_count[0],
+            uniform.directional_direction_count[1],
+            uniform.directional_direction_count[2],
+        );
+
+        assert!((actual_direction - expected_direction).length() < 0.001);
+        assert_eq!(uniform.directional_direction_count[3], 1.0);
+        assert_eq!(uniform.directional_color_intensity[3], 2.4);
+        assert_eq!(uniform.local_position_radius[0], [0.9, 1.2, 1.1, 4.0]);
+        assert_eq!(uniform.local_color_intensity[0][3], 5.0);
+    }
 
     #[test]
     fn wasd_moves_camera_relative_to_view_direction() {

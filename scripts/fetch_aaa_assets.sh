@@ -44,6 +44,8 @@ fetch_surface() {
     done
 }
 
+
+
 for model in Barrel_01 street_lamp_01 concrete_road_barrier steel_frame_shelves_01 utility_box_01 old_tyre metal_trash_can; do
     fetch_model "$model"
 done
@@ -51,5 +53,6 @@ done
 for surface in asphalt_02 concrete_floor brick_wall_08 metal_plate_02; do
     fetch_surface "$surface"
 done
+
 
 find "$destination" -type f -print0 | sort -z | xargs -0 sha256sum

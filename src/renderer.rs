@@ -778,14 +778,18 @@ impl CpuRenderer {
                     let noise = (blue_noise_hash(x, y, self.config.frame_index, 0xA53C_91E9) & 255)
                         as f32
                         / 255.0;
-                    let sky = scene.sky_color * (0.35 + noise * 0.05);
+                    let sky = scene.sky_color * (0.28 + noise * 0.04);
                     let emissive = scene
                         .materials
                         .iter()
                         .filter(|m| m.flags.emissive)
                         .fold(Color::BLACK, |acc, m| acc + m.emission * 0.12);
+                    let view_ray = (g.world - scene.camera.position).normalize_or_zero();
+                    let reflected = reflect(view_ray, g.normal);
+                    let proxy = trace_alley_proxy(scene, g.world + g.normal * 0.045, reflected);
                     let glass_line = if g.glass && x % 2 == 0 { 1.25 } else { 1.0 };
-                    buffers.reflections[idx] = (sky + emissive) * (1.0 - g.roughness) * glass_line;
+                    buffers.reflections[idx] =
+                        (sky + emissive * 0.55 + proxy) * (1.0 - g.roughness) * glass_line;
                 }
             }
         }
@@ -804,6 +808,7 @@ impl CpuRenderer {
             let mut diffuse_irradiance =
                 scene.ambient_color.to_vec3() * (0.6 + 0.4 * g.normal.y.max(0.0));
             let mut specular = Vec3::ZERO;
+            let ao = buffers.ao[idx];
 
             for light in &scene.lights {
                 let (l, attenuation) = match light.kind {
@@ -817,6 +822,31 @@ impl CpuRenderer {
                         let a = 1.0 - dist / radius;
                         (to_light / dist.max(1.0e-4), a * a)
                     }
+                    LightKind::Spot {
+                        position,
+                        direction,
+                        radius,
+                        inner_angle_radians,
+                        outer_angle_radians,
+                    } => {
+                        let to_light = position - g.world;
+                        let dist = to_light.length();
+                        if dist >= radius {
+                            continue;
+                        }
+                        let surface_to_light = to_light / dist.max(1.0e-4);
+                        let light_to_surface = -surface_to_light;
+                        let inner = inner_angle_radians.cos();
+                        let outer = outer_angle_radians.cos();
+                        let cone = saturate(
+                            (light_to_surface.dot(direction.normalize_or_zero()) - outer)
+                                / (inner - outer).max(1.0e-4),
+                        );
+                        let smooth_cone = cone * cone * (3.0 - 2.0 * cone);
+                        let practical_fill = 0.42 + smooth_cone * 0.58;
+                        let a = 1.0 - dist / radius;
+                        (surface_to_light, a * a * practical_fill)
+                    }
                 };
                 let ndotl = g.normal.dot(l).max(0.0);
                 if ndotl <= 0.0 {
@@ -828,7 +858,7 @@ impl CpuRenderer {
                     1.0
                 };
                 let light_rgb = light.color.to_vec3() * (light.intensity * attenuation * shadow);
-                let burley = ndotl * (0.65 + 0.35 * g.roughness);
+                let burley = burley_diffuse(g.normal, view, l, g.roughness);
                 diffuse_irradiance += light_rgb * burley;
 
                 let h = (l + view).normalize_or_zero();
@@ -836,10 +866,11 @@ impl CpuRenderer {
                 let gloss = (1.0 - g.roughness).max(0.02);
                 let power = 2.0 + gloss * gloss * 126.0;
                 let fresnel = schlick_fresnel(view.dot(h).max(0.0), material.class);
-                specular += light_rgb * (ndoth.powf(power) * g.specular * shadow) * fresnel;
+                let specular_ao = specular_occlusion(g.normal.dot(view).max(0.0), ao, g.roughness);
+                specular +=
+                    light_rgb * (ndoth.powf(power) * g.specular * shadow * specular_ao) * fresnel;
             }
 
-            let ao = buffers.ao[idx];
             let albedo = g.albedo.to_vec3();
             let mut rgb = diffuse_irradiance * albedo * ao;
             rgb += specular * (0.45 + 0.55 * ao);
@@ -1038,7 +1069,14 @@ impl CpuRenderer {
                     DebugView::LightVolumes => {
                         let mut local = 0.0_f32;
                         for light in &scene.lights {
-                            if let LightKind::Local { position, radius } = light.kind {
+                            let local_light = match light.kind {
+                                LightKind::Local { position, radius } => Some((position, radius)),
+                                LightKind::Spot {
+                                    position, radius, ..
+                                } => Some((position, radius)),
+                                LightKind::Directional { .. } => None,
+                            };
+                            if let Some((position, radius)) = local_light {
                                 local = local.max(1.0 - (position - g.world).length() / radius);
                             }
                         }
@@ -1083,6 +1121,175 @@ fn schlick_fresnel(cos_theta: f32, class: MaterialClass) -> Vec3 {
     };
     let f = (1.0 - cos_theta).powi(5);
     lerp3(f0, Vec3::ONE, f)
+}
+
+fn reflect(direction: Vec3, normal: Vec3) -> Vec3 {
+    direction - normal * (2.0 * direction.dot(normal))
+}
+
+fn pow5(value: f32) -> f32 {
+    let value2 = value * value;
+    value2 * value2 * value
+}
+
+fn burley_diffuse(normal: Vec3, view: Vec3, light: Vec3, roughness: f32) -> f32 {
+    let ndotl = normal.dot(light).max(0.0);
+    let ndotv = normal.dot(view).max(0.0);
+    let half_direction = (light + view).normalize_or_zero();
+    let ldoth = light.dot(half_direction).max(0.0);
+    let fd90 = 0.5 + 2.0 * ldoth * ldoth * roughness.max(0.04);
+    let light_scatter = 1.0 + (fd90 - 1.0) * pow5(1.0 - ndotl);
+    let view_scatter = 1.0 + (fd90 - 1.0) * pow5(1.0 - ndotv);
+    ndotl * light_scatter * view_scatter
+}
+
+fn specular_occlusion(ndotv: f32, ao: f32, roughness: f32) -> f32 {
+    ((ndotv + ao).powf(2.0_f32.powf(-16.0 * roughness.max(0.04) - 1.0)) - 1.0 + ao).clamp(0.0, 1.0)
+}
+
+fn trace_alley_proxy(scene: &RenderScene, origin: Vec3, ray: Vec3) -> Color {
+    let mut best_t = 1_000_000.0_f32;
+    let mut best_radiance = Vec3::ZERO;
+
+    if ray.y.abs() > 0.0001 {
+        let t = (-0.06 - origin.y) / ray.y;
+        let p = origin + ray * t;
+        if t > 0.04 && t < best_t && p.x.abs() < 3.65 && p.z > -18.6 && p.z < 8.5 {
+            best_t = t;
+            best_radiance =
+                proxy_direct_radiance(scene, p, Vec3::Y, Vec3::new(0.045, 0.052, 0.055));
+        }
+    }
+
+    if ray.x.abs() > 0.0001 {
+        let left_t = (-5.0 - origin.x) / ray.x;
+        let left_p = origin + ray * left_t;
+        if left_t > 0.04
+            && left_t < best_t
+            && left_p.y > 0.0
+            && left_p.y < 7.0
+            && left_p.z > -18.6
+            && left_p.z < 8.5
+        {
+            best_t = left_t;
+            best_radiance =
+                proxy_direct_radiance(scene, left_p, Vec3::X, Vec3::new(0.18, 0.125, 0.10));
+        }
+
+        let right_t = (5.0 - origin.x) / ray.x;
+        let right_p = origin + ray * right_t;
+        if right_t > 0.04
+            && right_t < best_t
+            && right_p.y > 0.0
+            && right_p.y < 7.0
+            && right_p.z > -18.6
+            && right_p.z < 8.5
+        {
+            best_t = right_t;
+            best_radiance =
+                proxy_direct_radiance(scene, right_p, -Vec3::X, Vec3::new(0.18, 0.125, 0.10));
+        }
+    }
+
+    if ray.z.abs() > 0.0001 {
+        let end_t = (-18.45 - origin.z) / ray.z;
+        let end_p = origin + ray * end_t;
+        if end_t > 0.04 && end_t < best_t && end_p.x.abs() < 5.1 && end_p.y > 0.0 && end_p.y < 7.0 {
+            best_t = end_t;
+            best_radiance =
+                proxy_direct_radiance(scene, end_p, Vec3::Z, Vec3::new(0.17, 0.12, 0.10));
+        }
+    }
+
+    if best_t >= 1_000_000.0 {
+        return Color::BLACK;
+    }
+    let distance_fade = 1.0 / (1.0 + best_t * 0.025);
+    Color::from_vec3(best_radiance * distance_fade, 1.0)
+}
+
+fn proxy_direct_radiance(scene: &RenderScene, position: Vec3, normal: Vec3, albedo: Vec3) -> Vec3 {
+    let mut radiance = albedo * (scene.ambient_color.to_vec3() * (0.52 + normal.y.max(0.0) * 0.34));
+    for light in &scene.lights {
+        match light.kind {
+            LightKind::Directional { direction } => {
+                let light_direction = (-direction).normalize_or_zero();
+                radiance += albedo
+                    * light.color.to_vec3()
+                    * (light.intensity * light_direction.dot(normal).max(0.0) * 0.55);
+            }
+            LightKind::Local {
+                position: light_position,
+                radius,
+            } => {
+                let to_light = light_position - position;
+                let distance_to_light = to_light.length();
+                if distance_to_light >= radius {
+                    continue;
+                }
+                let light_direction = to_light / distance_to_light.max(1.0e-4);
+                let attenuation = (1.0 - distance_to_light / radius).powi(2);
+                radiance += albedo
+                    * light.color.to_vec3()
+                    * (light.intensity * attenuation * light_direction.dot(normal).max(0.0) * 0.72);
+            }
+            LightKind::Spot {
+                position: light_position,
+                direction,
+                radius,
+                inner_angle_radians,
+                outer_angle_radians,
+            } => {
+                let to_light = light_position - position;
+                let distance_to_light = to_light.length();
+                if distance_to_light >= radius {
+                    continue;
+                }
+                let light_direction = to_light / distance_to_light.max(1.0e-4);
+                let light_to_surface = -light_direction;
+                let inner = inner_angle_radians.cos();
+                let outer = outer_angle_radians.cos();
+                let cone = saturate(
+                    (light_to_surface.dot(direction.normalize_or_zero()) - outer)
+                        / (inner - outer).max(1.0e-4),
+                );
+                let smooth_cone = cone * cone * (3.0 - 2.0 * cone);
+                let practical_fill = 0.42 + smooth_cone * 0.58;
+                let attenuation = (1.0 - distance_to_light / radius).powi(2);
+                radiance += albedo
+                    * light.color.to_vec3()
+                    * (light.intensity
+                        * attenuation
+                        * practical_fill
+                        * light_direction.dot(normal).max(0.0)
+                        * 0.72);
+            }
+        }
+    }
+    radiance + proxy_emissive_radiance(position)
+}
+
+fn proxy_emissive_radiance(position: Vec3) -> Vec3 {
+    let mut emission = Vec3::ZERO;
+    if (position.x - 4.88).abs() < 0.20
+        && (position.z + 6.7).abs() < 1.38
+        && (position.y - 2.65).abs() < 0.24
+    {
+        emission += Vec3::new(9.5, 2.2, 0.28);
+    }
+    if (position.x + 4.88).abs() < 0.20
+        && (position.z + 5.4).abs() < 1.78
+        && (position.y - 2.8).abs() < 0.22
+    {
+        emission += Vec3::new(0.65, 6.2, 9.5);
+    }
+    if (position.z + 18.38).abs() < 0.22
+        && (position.x + 1.7).abs() < 2.08
+        && (position.y - 3.25).abs() < 0.24
+    {
+        emission += Vec3::new(0.55, 5.8, 8.8);
+    }
+    emission
 }
 
 fn material_id_color(id: u8) -> Color {

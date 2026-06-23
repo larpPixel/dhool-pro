@@ -8,6 +8,7 @@ struct Camera {
 struct Material {
     base_color: vec4<f32>,
     surface: vec4<f32>,
+    emission: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -62,13 +63,17 @@ fn fs_main(input: VertexOutput) -> GBufferOutput {
     let tangent = normalize(input.tangent.xyz - geometric_normal * dot(input.tangent.xyz, geometric_normal));
     let bitangent = normalize(cross(geometric_normal, tangent)) * input.tangent.w;
     let mapped_normal = normalize(mat3x3<f32>(tangent, bitangent, geometric_normal) * sampled_normal);
-    output.albedo = material.base_color * input.color * sampled;
+    let base = material.base_color * input.color * sampled;
+    let emission_strength = material.surface.w;
+    let emission_chroma = material.emission.rgb / max(max(material.emission.r, material.emission.g), max(material.emission.b, 0.0001));
+    let emissive_mask = step(0.0001, emission_strength);
+    output.albedo = vec4<f32>(mix(base.rgb, emission_chroma, emissive_mask), base.a);
     output.normal_flags = vec4<f32>(mapped_normal, material.surface.w);
     output.pbr_material = vec4<f32>(
         clamp(material.surface.x * sampled_pbr.g, 0.04, 1.0),
         clamp(material.surface.y * sampled_pbr.b, 0.0, 1.0),
         clamp(material.surface.z * sampled_pbr.r, 0.0, 1.0),
-        material.surface.w / 255.0
+        clamp(emission_strength / material.emission.a, 0.0, 1.0)
     );
     return output;
 }

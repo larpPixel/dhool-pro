@@ -163,8 +163,20 @@ impl Mesh {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LightKind {
-    Directional { direction: Vec3 },
-    Local { position: Vec3, radius: f32 },
+    Directional {
+        direction: Vec3,
+    },
+    Local {
+        position: Vec3,
+        radius: f32,
+    },
+    Spot {
+        position: Vec3,
+        direction: Vec3,
+        radius: f32,
+        inner_angle_radians: f32,
+        outer_angle_radians: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -510,22 +522,28 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             },
             Light {
                 name: "cyan_practical",
-                kind: LightKind::Local {
+                kind: LightKind::Spot {
                     position: Vec3::new(-3.8, 2.8, -5.4),
-                    radius: 8.0,
+                    direction: Vec3::new(0.92, -0.30, -0.25).normalize_or_zero(),
+                    radius: 8.5,
+                    inner_angle_radians: 46.0_f32.to_radians(),
+                    outer_angle_radians: 67.0_f32.to_radians(),
                 },
                 color: Color::rgb(0.1, 0.75, 1.0),
-                intensity: 7.0,
+                intensity: 7.6,
                 casts_shadow: true,
             },
             Light {
                 name: "amber_practical",
-                kind: LightKind::Local {
+                kind: LightKind::Spot {
                     position: Vec3::new(3.6, 2.4, -8.0),
-                    radius: 7.0,
+                    direction: Vec3::new(-0.94, -0.24, 0.15).normalize_or_zero(),
+                    radius: 8.2,
+                    inner_angle_radians: 44.0_f32.to_radians(),
+                    outer_angle_radians: 67.0_f32.to_radians(),
                 },
                 color: Color::rgb(1.0, 0.25, 0.04),
-                intensity: 6.0,
+                intensity: 7.2,
                 casts_shadow: true,
             },
         ],
