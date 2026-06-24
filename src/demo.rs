@@ -1,5 +1,5 @@
 use crate::renderer::{CpuRenderer, DebugView, RenderConfig};
-use crate::scene::build_asset_showcase;
+use crate::scene::{build_aaa_scene, build_asset_showcase};
 use image::{ColorType, ImageFormat};
 use std::fmt::Write as _;
 use std::fs;
@@ -20,7 +20,13 @@ pub fn export_demo_gallery(
     width: u32,
     height: u32,
 ) -> Result<DemoSummary, String> {
-    let scene = build_asset_showcase(asset_path.as_ref()).map_err(|error| error.to_string())?;
+    let asset_path = asset_path.as_ref();
+    let scene = if asset_path.is_dir() {
+        build_aaa_scene(asset_path)
+    } else {
+        build_asset_showcase(asset_path)
+    }
+    .map_err(|error| error.to_string())?;
     let output_dir = output_dir.as_ref();
     fs::create_dir_all(output_dir).map_err(|error| error.to_string())?;
 
@@ -86,7 +92,7 @@ pub fn export_demo_gallery(
 
     let triangles = scene.meshes.iter().map(|mesh| mesh.indices.len()).sum();
     let html = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Dhool Pro Showcase</title><style>{}</style></head><body><header><p class=\"eyebrow\">GOSPOL REFERENCE IMPLEMENTATION</p><h1>Dhool Pro renderer showcase</h1><p>Vendor-agnostic CPU reference path · {} meshes · {} triangles · {} materials</p></header><main>{cards}</main><footer>Web asset: Khronos glTF Sample Assets / Suzanne, CC0 1.0.</footer></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Dhool Pro Showcase</title><style>{}</style></head><body><header><p class=\"eyebrow\">LIVE-SCENE DIAGNOSTICS</p><h1>Dhool Pro renderer showcase</h1><p>Vendor-agnostic CPU reference path · {} meshes · {} triangles · {} materials</p></header><main>{cards}</main><footer>Default gallery scene: assets/aaa, matching the live GPU alley geometry and materials. Pass --asset path/to/model.gltf for the deterministic glTF showcase.</footer></body></html>",
         STYLE,
         scene.meshes.len(),
         triangles,
@@ -118,5 +124,5 @@ fn title(slug: &str) -> String {
 }
 
 const STYLE: &str = r#"
-:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#0b1018;color:#e7edf5}*{box-sizing:border-box}body{margin:0}header{padding:64px clamp(24px,7vw,110px) 36px;background:radial-gradient(circle at 80% 0,#283e5e 0,transparent 38%),linear-gradient(145deg,#111a28,#080c12)}h1{font-size:clamp(2.4rem,6vw,5.6rem);line-height:.95;letter-spacing:-.06em;margin:.15em 0;max-width:900px}.eyebrow{color:#f2b84b;letter-spacing:.18em;font-weight:800;font-size:.72rem}header>p:last-child{color:#9eacbd}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;padding:30px clamp(18px,4vw,60px) 64px}figure{margin:0;background:#121a25;border:1px solid #263243;border-radius:10px;overflow:hidden;box-shadow:0 18px 45px #0006}img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;background:#172239}figcaption{padding:14px 16px;color:#cad5e3;font-weight:700;letter-spacing:.02em}footer{padding:24px 5vw;border-top:1px solid #222d3c;color:#8190a3;font-size:.85rem}
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#0b1018;color:#e7edf5}*{box-sizing:border-box}body{margin:0}header{padding:64px 7vw 36px;background:linear-gradient(145deg,#101722,#080c12)}h1{font-size:3.8rem;line-height:1;margin:.15em 0;max-width:900px}.eyebrow{color:#f2b84b;letter-spacing:0;font-weight:800;font-size:.72rem}header>p:last-child{color:#9eacbd}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;padding:30px 4vw 64px}figure{margin:0;background:#121a25;border:1px solid #263243;border-radius:8px;overflow:hidden;box-shadow:0 18px 45px #0006}img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;background:#172239}figcaption{padding:14px 16px;color:#cad5e3;font-weight:700;letter-spacing:0}footer{padding:24px 5vw;border-top:1px solid #222d3c;color:#8190a3;font-size:.85rem}@media (max-width:640px){header{padding:42px 24px 28px}h1{font-size:2.35rem}main{grid-template-columns:1fr;padding:22px 18px 48px}}
 "#;

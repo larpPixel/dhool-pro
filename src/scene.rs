@@ -498,6 +498,45 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         Color::rgb(7.0, 0.7, 0.08),
         15,
     ));
+    let dark_fixture_material = materials.len();
+    materials.push(solid_material(
+        "charcoal_fixture_metal",
+        SolidMaterialParams {
+            class: MaterialClass::Metal,
+            base_color: Color::rgb(0.030, 0.036, 0.042),
+            roughness: 0.34,
+            metallic: 0.88,
+            specular_intensity: 0.72,
+            cavity: 0.72,
+            material_id: 16,
+        },
+    ));
+    let warm_edge_material = materials.len();
+    materials.push(solid_material(
+        "aged_brass_edge_trim",
+        SolidMaterialParams {
+            class: MaterialClass::Metal,
+            base_color: Color::rgb(0.55, 0.43, 0.26),
+            roughness: 0.30,
+            metallic: 0.78,
+            specular_intensity: 0.80,
+            cavity: 0.82,
+            material_id: 17,
+        },
+    ));
+    let puddle_material = materials.len();
+    materials.push(solid_material(
+        "foreground_clear_puddle",
+        SolidMaterialParams {
+            class: MaterialClass::Glass,
+            base_color: Color::rgb(0.018, 0.024, 0.027),
+            roughness: 0.035,
+            metallic: 0.0,
+            specular_intensity: 1.0,
+            cavity: 0.96,
+            material_id: 18,
+        },
+    ));
 
     let mut scene = RenderScene {
         camera: Camera {
@@ -647,7 +686,294 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::rotation_y(90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-4.88, 2.8, -5.4)),
         ),
+        wall_mesh(
+            "left_recessed_service_bay",
+            3.2,
+            4.6,
+            3,
+            Vec2::new(1.5, 2.3),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.78, 2.28, -7.25)),
+        ),
+        wall_mesh(
+            "right_stacked_service_bay",
+            2.4,
+            4.2,
+            3,
+            Vec2::new(1.2, 2.1),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.78, 2.1, -4.75)),
+        ),
+        wall_mesh(
+            "mid_alley_overhead_duct",
+            8.7,
+            0.42,
+            3,
+            Vec2::new(3.0, 0.5),
+            Mat4::translation(Vec3::new(0.0, 4.95, -8.4)),
+        ),
+        wall_mesh(
+            "left_wall_cable_tray",
+            7.6,
+            0.18,
+            3,
+            Vec2::new(3.0, 0.35),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.72, 4.45, -10.4)),
+        ),
+        wall_mesh(
+            "right_wall_steam_riser",
+            0.42,
+            5.4,
+            3,
+            Vec2::new(0.4, 2.7),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.72, 2.72, -12.8)),
+        ),
+        wall_mesh(
+            "hanging_wayfinding_panel",
+            1.2,
+            1.05,
+            5,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(12.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-1.95, 3.05, -8.7)),
+        ),
+        wall_mesh(
+            "mid_alley_shadow_crossbeam",
+            7.8,
+            0.55,
+            3,
+            Vec2::new(3.2, 0.55),
+            Mat4::translation(Vec3::new(0.0, 4.18, -6.7)),
+        ),
+        wall_mesh(
+            "left_pipe_bundle_upper",
+            0.72,
+            4.8,
+            3,
+            Vec2::new(0.6, 2.4),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.66, 2.55, -6.35)),
+        ),
+        wall_mesh(
+            "right_shadow_box_awning",
+            2.8,
+            0.85,
+            3,
+            Vec2::new(1.6, 0.7),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.66, 3.25, -8.15)),
+        ),
+        wall_mesh(
+            "center_dangling_cable_sheet",
+            2.2,
+            1.4,
+            3,
+            Vec2::new(1.0, 1.2),
+            Mat4::rotation_y(8.0_f32.to_radians()) * Mat4::translation(Vec3::new(0.85, 3.1, -10.8)),
+        ),
+        wall_mesh(
+            "far_scaffold_shadow",
+            5.2,
+            3.2,
+            3,
+            Vec2::new(2.5, 1.6),
+            Mat4::translation(Vec3::new(0.0, 2.65, -14.8)),
+        ),
     ]);
+
+    scene.meshes.extend([
+        detail_wall_mesh(
+            "cyan_platform_light_backplate",
+            3.9,
+            0.68,
+            dark_fixture_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.90, 2.80, -5.4)),
+        ),
+        detail_wall_mesh(
+            "cyan_platform_light_lower_lip",
+            3.8,
+            0.08,
+            warm_edge_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.86, 2.47, -5.4)),
+        ),
+        detail_wall_mesh(
+            "amber_service_light_backplate",
+            3.0,
+            0.62,
+            dark_fixture_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.90, 2.65, -6.7)),
+        ),
+        detail_wall_mesh(
+            "amber_service_light_upper_lip",
+            2.8,
+            0.08,
+            warm_edge_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.86, 2.98, -6.7)),
+        ),
+        detail_wall_mesh(
+            "far_cyan_wayfinding_backplate",
+            4.4,
+            0.74,
+            dark_fixture_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::translation(Vec3::new(-1.7, 3.25, -18.40)),
+        ),
+        detail_wall_mesh(
+            "left_loading_shutter_top_trim",
+            4.5,
+            0.12,
+            warm_edge_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.86, 3.88, -3.8)),
+        ),
+        detail_wall_mesh(
+            "left_loading_shutter_side_trim",
+            0.12,
+            3.9,
+            warm_edge_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.84, 1.93, -1.62)),
+        ),
+        detail_wall_mesh(
+            "right_loading_shutter_top_trim",
+            4.1,
+            0.12,
+            warm_edge_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.86, 3.55, -9.6)),
+        ),
+        detail_wall_mesh(
+            "right_wall_foreground_kickplate",
+            15.5,
+            0.30,
+            dark_fixture_material,
+            Vec2::new(5.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.58, 0.34, -4.8)),
+        ),
+        detail_wall_mesh(
+            "right_wall_near_access_panel",
+            2.7,
+            3.3,
+            dark_fixture_material,
+            Vec2::new(1.0, 1.6),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.54, 2.15, -2.35)),
+        ),
+        detail_wall_mesh(
+            "right_wall_mid_access_panel",
+            2.2,
+            2.5,
+            dark_fixture_material,
+            Vec2::new(1.0, 1.2),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.54, 2.05, -11.65)),
+        ),
+        detail_wall_mesh(
+            "right_wall_conduit_upper",
+            9.5,
+            0.10,
+            warm_edge_material,
+            Vec2::new(4.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.50, 3.72, -5.2)),
+        ),
+        detail_wall_mesh(
+            "right_wall_conduit_middle",
+            8.8,
+            0.08,
+            warm_edge_material,
+            Vec2::new(4.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.50, 2.62, -4.7)),
+        ),
+        detail_wall_mesh(
+            "right_wall_conduit_lower",
+            7.6,
+            0.08,
+            warm_edge_material,
+            Vec2::new(4.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.50, 1.42, -5.6)),
+        ),
+        detail_wall_mesh(
+            "right_wall_vertical_rib_near",
+            0.12,
+            5.0,
+            dark_fixture_material,
+            Vec2::new(1.0, 2.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.48, 2.55, -0.85)),
+        ),
+        detail_wall_mesh(
+            "right_wall_vertical_rib_mid",
+            0.12,
+            4.7,
+            dark_fixture_material,
+            Vec2::new(1.0, 2.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.48, 2.42, -6.95)),
+        ),
+        detail_wall_mesh(
+            "right_wall_small_amber_marker",
+            0.72,
+            0.14,
+            5,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.46, 2.92, -3.2)),
+        ),
+        detail_wall_mesh(
+            "right_wall_far_amber_marker",
+            0.58,
+            0.12,
+            5,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.46, 3.25, -12.9)),
+        ),
+        puddle_mesh(
+            "foreground_reflection_puddle",
+            3.15,
+            5.6,
+            puddle_material,
+            Vec2::new(1.0, 1.7),
+            Vec3::new(0.35, -0.049, 1.0),
+        ),
+        puddle_mesh(
+            "mid_alley_reflection_puddle",
+            2.4,
+            4.2,
+            puddle_material,
+            Vec2::new(1.0, 1.4),
+            Vec3::new(1.10, -0.048, -6.6),
+        ),
+    ]);
+
+    for name in [
+        "left_aged_brick",
+        "right_aged_brick",
+        "alley_end_brick",
+        "left_loading_shutter",
+        "right_loading_shutter",
+        "left_recessed_service_bay",
+        "far_scaffold_shadow",
+    ] {
+        mark_prepass(&mut scene, name);
+    }
 
     append_gltf_instances(
         &mut scene,
@@ -783,6 +1109,40 @@ fn emissive_material(name: &str, base_color: Color, emission: Color, material_id
     }
 }
 
+#[derive(Clone, Copy)]
+struct SolidMaterialParams {
+    class: MaterialClass,
+    base_color: Color,
+    roughness: f32,
+    metallic: f32,
+    specular_intensity: f32,
+    cavity: f32,
+    material_id: u8,
+}
+
+fn solid_material(name: &str, params: SolidMaterialParams) -> Material {
+    Material {
+        name: name.to_string(),
+        class: params.class,
+        base_color: params.base_color,
+        base_color_texture: None,
+        normal_texture: None,
+        pbr_texture: None,
+        roughness: params.roughness,
+        metallic: params.metallic,
+        specular_intensity: params.specular_intensity,
+        cavity: params.cavity,
+        material_id: params.material_id,
+        texture_sample_count: 1,
+        flags: MaterialFlags {
+            glass: params.class == MaterialClass::Glass,
+            receives_contact_shadows: true,
+            ..MaterialFlags::default()
+        },
+        emission: Color::BLACK,
+    }
+}
+
 fn plane_mesh(
     name: &str,
     width: f32,
@@ -815,9 +1175,24 @@ fn plane_mesh(
         transform: Mat4::translation(position),
         shadow_class: ShadowCasterClass::None,
         is_floor_or_ground: ground,
-        prepass_eligible: true,
-        reflection_proxy: false,
+        prepass_eligible: false,
+        reflection_proxy: true,
     }
+}
+
+fn puddle_mesh(
+    name: &str,
+    width: f32,
+    depth: f32,
+    material_index: usize,
+    uv_scale: Vec2,
+    position: Vec3,
+) -> Mesh {
+    let mut mesh = plane_mesh(name, width, depth, material_index, uv_scale, position, true);
+    mesh.shadow_class = ShadowCasterClass::None;
+    mesh.prepass_eligible = false;
+    mesh.reflection_proxy = false;
+    mesh
 }
 
 fn wall_mesh(
@@ -840,8 +1215,28 @@ fn wall_mesh(
         transform,
         shadow_class: ShadowCasterClass::Main,
         is_floor_or_ground: false,
-        prepass_eligible: true,
-        reflection_proxy: false,
+        prepass_eligible: false,
+        reflection_proxy: true,
+    }
+}
+
+fn detail_wall_mesh(
+    name: &str,
+    width: f32,
+    height: f32,
+    material_index: usize,
+    uv_scale: Vec2,
+    transform: Mat4,
+) -> Mesh {
+    let mut mesh = wall_mesh(name, width, height, material_index, uv_scale, transform);
+    mesh.prepass_eligible = false;
+    mesh.reflection_proxy = false;
+    mesh
+}
+
+fn mark_prepass(scene: &mut RenderScene, name: &str) {
+    if let Some(mesh) = scene.meshes.iter_mut().find(|mesh| mesh.name == name) {
+        mesh.prepass_eligible = true;
     }
 }
 

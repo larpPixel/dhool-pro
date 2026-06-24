@@ -3,6 +3,7 @@ struct Camera {
     inverse_view_projection: mat4x4<f32>,
     position_time: vec4<f32>,
     viewport: vec4<f32>,
+    previous_view_projection: mat4x4<f32>,
 };
 
 struct Material {
@@ -33,12 +34,15 @@ struct VertexOutput {
     @location(2) uv: vec2<f32>,
     @location(3) color: vec4<f32>,
     @location(4) tangent: vec4<f32>,
+    @location(5) current_clip_position: vec4<f32>,
+    @location(6) previous_clip_position: vec4<f32>,
 };
 
 struct GBufferOutput {
     @location(0) albedo: vec4<f32>,
     @location(1) normal_flags: vec4<f32>,
     @location(2) pbr_material: vec4<f32>,
+    @location(3) motion_vectors: vec4<f32>,
 };
 
 @vertex
@@ -50,6 +54,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.uv = input.uv;
     output.color = input.color;
     output.tangent = input.tangent;
+    output.current_clip_position = output.clip_position;
+    output.previous_clip_position = camera.previous_view_projection * vec4<f32>(input.position, 1.0);
     return output;
 }
 
@@ -75,5 +81,8 @@ fn fs_main(input: VertexOutput) -> GBufferOutput {
         clamp(material.surface.z * sampled_pbr.r, 0.0, 1.0),
         clamp(emission_strength / material.emission.a, 0.0, 1.0)
     );
+    let current_ndc = input.current_clip_position.xy / max(input.current_clip_position.w, 0.00001);
+    let previous_ndc = input.previous_clip_position.xy / max(input.previous_clip_position.w, 0.00001);
+    output.motion_vectors = vec4<f32>((current_ndc - previous_ndc) * vec2<f32>(0.5, -0.5), 0.0, 1.0);
     return output;
 }

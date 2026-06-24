@@ -122,7 +122,7 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<(Vec<Material>, Vec<Mesh>),
                 transform,
                 shadow_class: ShadowCasterClass::Main,
                 is_floor_or_ground: false,
-                prepass_eligible: true,
+                prepass_eligible: false,
                 reflection_proxy: reflective,
             });
         }

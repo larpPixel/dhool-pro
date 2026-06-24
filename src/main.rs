@@ -90,7 +90,7 @@ fn main() {
             .position(|arg| arg == "--asset")
             .and_then(|asset_index| args.get(asset_index + 1))
             .map(String::as_str)
-            .unwrap_or("assets/demo/suzanne/Suzanne.gltf");
+            .unwrap_or("assets/aaa");
         let summary = export_demo_gallery(asset, output, 480, 300).unwrap_or_else(|error| {
             eprintln!("gallery export failed: {error}");
             std::process::exit(2);

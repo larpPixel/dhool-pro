@@ -218,9 +218,9 @@ fn rain_wetness(world_position: vec3<f32>, normal: vec3<f32>, surface: vec4<f32>
     );
     let non_emissive = 1.0 - smoothstep(0.12, 0.75, surface.a);
     let material_accepts_water = 1.0 - surface.y * 0.35;
-    let horizontal_wet = upward * (0.30 + puddle * 0.48 + fine_beads * 0.10);
-    let vertical_runoff = side * runoff * 0.20;
-    return clamp((horizontal_wet + vertical_runoff) * non_emissive * material_accepts_water * lights.weather.x, 0.0, 0.88);
+    let horizontal_wet = upward * (0.42 + puddle * 0.58 + fine_beads * 0.14);
+    let vertical_runoff = side * runoff * 0.16;
+    return clamp((horizontal_wet + vertical_runoff) * non_emissive * material_accepts_water * lights.weather.x, 0.0, 0.96);
 }
 
 fn screen_space_occlusion(pixel: vec2<u32>, world_position: vec3<f32>, normal: vec3<f32>) -> f32 {
@@ -248,12 +248,13 @@ fn screen_space_occlusion(pixel: vec2<u32>, world_position: vec3<f32>, normal: v
         let distance_to_sample = length(delta);
         if distance_to_sample > 0.025 && distance_to_sample < 1.85 {
             let horizon = max(dot(normal, delta / distance_to_sample), 0.0);
-            let near_contact = 1.0 - smoothstep(0.025, 0.42, distance_to_sample);
-            let broad_contact = 1.0 - smoothstep(0.10, 1.85, distance_to_sample);
-            occlusion += horizon * (near_contact * 1.15 + broad_contact * 0.55);
+            let near_contact = 1.0 - smoothstep(0.018, 0.34, distance_to_sample);
+            let broad_contact = 1.0 - smoothstep(0.08, 1.65, distance_to_sample);
+            let floor_contact = smoothstep(0.36, 0.96, normal.y) * (1.0 - smoothstep(0.02, 0.48, abs(delta.y)));
+            occlusion += horizon * (near_contact * 1.72 + broad_contact * 0.70 + floor_contact * near_contact * 0.58);
         }
     }
-    return clamp(1.0 - occlusion * 0.19, 0.24, 1.0);
+    return clamp(1.0 - occlusion * 0.28, 0.14, 1.0);
 }
 
 fn shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_direction: vec3<f32>) -> f32 {
@@ -405,9 +406,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let world_position = reconstruct_world_position(input.uv, scene_depth);
     let wetness = rain_wetness(world_position, normal, surface_raw, camera.position_time.w);
     let impact = procedural_rain_impacts(world_position, normal, surface_raw, camera.position_time.w);
-    let water_coverage = clamp(wetness + impact * 0.45, 0.0, 1.0);
+    let water_coverage = clamp(wetness + impact * 0.62, 0.0, 1.0);
     let effective_surface = vec4<f32>(
-        mix(surface_raw.x, 0.055, water_coverage * 0.72),
+        mix(surface_raw.x, 0.032, water_coverage * 0.84),
         surface_raw.y,
         surface_raw.z,
         surface_raw.a
@@ -436,31 +437,44 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let position_radius = lights.local_position_radius[light_index];
         let to_light = position_radius.xyz - world_position;
         let distance_to_light = length(to_light);
+        let color_intensity = lights.local_color_intensity[light_index];
+        if color_intensity.w <= 0.0 || distance_to_light >= position_radius.w {
+            continue;
+        }
         let local_direction = to_light / max(distance_to_light, 0.0001);
         let light_to_surface = -local_direction;
         let attenuation = pow(clamp(1.0 - distance_to_light / position_radius.w, 0.0, 1.0), 2.0);
+        if attenuation <= 0.0001 {
+            continue;
+        }
         let cone = spot_cone_attenuation(light_index, light_to_surface);
+        if lights.local_inner_shadow[light_index].w > 0.5 && cone <= 0.001 {
+            continue;
+        }
         let spot = practical_spot_fill(light_index, cone);
-        let color_intensity = lights.local_color_intensity[light_index];
-        let local_shadow = mix(
-            1.0,
-            local_shadow_visibility(world_position, normal, light_index),
-            practical_spot_shadow_weight(light_index, cone)
-        );
+        let local_shadow_weight = practical_spot_shadow_weight(light_index, cone);
+        var local_shadow = 1.0;
+        if local_shadow_weight > 0.001 {
+            local_shadow = mix(
+                1.0,
+                local_shadow_visibility(world_position, normal, light_index),
+                local_shadow_weight
+            );
+        }
         let local_radiance = color_intensity.rgb * color_intensity.w * attenuation * spot * local_shadow;
         hdr += shade_light(base, normal, view_direction, effective_surface, wetness, local_direction, local_radiance);
     }
     hdr += base_raw * emissive_strength;
-    let surface_fresnel = 0.025 + pow(1.0 - max(dot(normal, view_direction), 0.0), 5.0) * 0.62;
-    let puddle_visibility = smoothstep(0.12, 0.78, water_coverage) * (1.0 - smoothstep(0.48, 0.92, effective_surface.x));
+    let surface_fresnel = 0.035 + pow(1.0 - max(dot(normal, view_direction), 0.0), 5.0) * 0.72;
+    let puddle_visibility = smoothstep(0.06, 0.64, water_coverage) * (1.0 - smoothstep(0.42, 0.90, effective_surface.x));
     let base_reflected_weight = clamp(
-        (surface_fresnel + surface_raw.y * 0.38) * puddle_visibility * (0.55 + impact * 0.18) * (1.0 - reflected_roughness * 0.35),
+        (surface_fresnel + surface_raw.y * 0.38) * puddle_visibility * (0.74 + impact * 0.28) * (1.0 - reflected_roughness * 0.22),
         0.0,
-        0.58
+        0.78
     );
     let lit_luminance = max(luminance(hdr), 0.02);
     let reflection_luminance = max(luminance(reflected), 0.0001);
-    let reflection_energy_cap = lit_luminance * (0.24 + water_coverage * 0.34 + surface_fresnel * 0.28);
+    let reflection_energy_cap = lit_luminance * (0.30 + water_coverage * 0.56 + surface_fresnel * 0.34);
     let reflected_weight = min(base_reflected_weight, reflection_energy_cap / reflection_luminance);
     hdr += reflected * reflected_weight;
     let rain_light_mask = clamp(luminance(hdr) * 0.24 + emissive_strength * 0.05, 0.04, 1.0);
@@ -469,8 +483,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         * rain_light_mask
         * (0.10 + wetness * 0.18);
     hdr += impact_light;
-    let fog = smoothstep(0.78, 1.0, scene_depth);
-    hdr = mix(hdr, vec3<f32>(0.045, 0.09, 0.16), fog * 0.45);
+    let fog = smoothstep(0.86, 1.0, scene_depth);
+    hdr = mix(hdr, vec3<f32>(0.030, 0.052, 0.075), fog * 0.22);
     let vignette_distance = distance(input.uv, vec2<f32>(0.5));
     let vignette = 1.0 - smoothstep(0.42, 0.78, vignette_distance) * 0.42;
     return vec4<f32>(max(hdr * vignette, vec3<f32>(0.0)), 1.0);

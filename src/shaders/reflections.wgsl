@@ -22,14 +22,26 @@ struct Lights {
     local_inner_shadow: array<vec4<f32>, 4>,
 };
 
+struct ReflectionProxies {
+    count: vec4<u32>,
+    bounds_min: array<vec4<f32>, 24>,
+    bounds_max: array<vec4<f32>, 24>,
+    radiance: array<vec4<f32>, 24>,
+};
 
-@group(0) @binding(0) var normals: texture_2d<f32>;
-@group(0) @binding(1) var pbr: texture_2d<f32>;
-@group(0) @binding(2) var depth: texture_depth_2d;
-@group(0) @binding(3) var output_reflection: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(4) var<uniform> frame: Frame;
-@group(0) @binding(5) var<uniform> camera: Camera;
-@group(0) @binding(6) var<uniform> lights: Lights;
+
+@group(0) @binding(0) var albedo: texture_2d<f32>;
+@group(0) @binding(1) var normals: texture_2d<f32>;
+@group(0) @binding(2) var pbr: texture_2d<f32>;
+@group(0) @binding(3) var depth: texture_depth_2d;
+@group(0) @binding(4) var output_reflection: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var<uniform> frame: Frame;
+@group(0) @binding(6) var<uniform> camera: Camera;
+@group(0) @binding(7) var<uniform> lights: Lights;
+@group(0) @binding(8) var reflection_history: texture_2d<f32>;
+@group(0) @binding(9) var motion_vectors: texture_2d<f32>;
+@group(0) @binding(10) var<uniform> reflection_proxies: ReflectionProxies;
+@group(0) @binding(11) var half_resolution_ssr: texture_2d<f32>;
 
 const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-5.8, 0.18, -19.2);
 const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(11.6, 8.2, 25.2);
@@ -107,9 +119,9 @@ fn rain_wetness(world_position: vec3<f32>, normal: vec3<f32>, surface: vec4<f32>
     );
     let non_emissive = 1.0 - smoothstep(0.12, 0.75, surface.a);
     let material_accepts_water = 1.0 - surface.y * 0.35;
-    let horizontal_wet = upward * (0.30 + puddle * 0.48 + fine_beads * 0.10);
-    let vertical_runoff = side * runoff * 0.20;
-    return clamp((horizontal_wet + vertical_runoff) * non_emissive * material_accepts_water * lights.weather.x, 0.0, 0.88);
+    let horizontal_wet = upward * (0.42 + puddle * 0.58 + fine_beads * 0.14);
+    let vertical_runoff = side * runoff * 0.16;
+    return clamp((horizontal_wet + vertical_runoff) * non_emissive * material_accepts_water * lights.weather.x, 0.0, 0.96);
 }
 
 fn spot_cone_attenuation(light_index: u32, light_to_surface: vec3<f32>) -> f32 {
@@ -131,91 +143,71 @@ fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
     return mix(0.42, 1.0, clamp(cone, 0.0, 1.0));
 }
 
-fn proxy_emissive_radiance(position: vec3<f32>) -> vec3<f32> {
-    var emission = vec3<f32>(0.0);
-    if abs(position.x - 4.88) < 0.20 && abs(position.z + 6.7) < 1.38 && abs(position.y - 2.65) < 0.24 {
-        emission += vec3<f32>(9.5, 2.2, 0.28);
-    }
-    if abs(position.x + 4.88) < 0.20 && abs(position.z + 5.4) < 1.78 && abs(position.y - 2.8) < 0.22 {
-        emission += vec3<f32>(0.65, 6.2, 9.5);
-    }
-    if abs(position.z + 18.38) < 0.22 && abs(position.x + 1.7) < 2.08 && abs(position.y - 3.25) < 0.24 {
-        emission += vec3<f32>(0.55, 5.8, 8.8);
-    }
-    return emission;
-}
 
-fn proxy_direct_radiance(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
-    var radiance = albedo * lights.ambient.rgb * (0.52 + max(normal.y, 0.0) * 0.34);
-    let moon_direction = safe_normalize(lights.directional_direction_count.xyz);
-    if lights.directional_color_intensity.w > 0.0 && length(moon_direction) > 0.0 {
-        let ndotl = max(dot(normal, moon_direction), 0.0);
-        radiance += albedo
-            * lights.directional_color_intensity.rgb
-            * lights.directional_color_intensity.w
-            * ndotl
-            * 0.55;
-    }
-
-    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 4.0));
-    for (var light_index = 0u; light_index < local_count; light_index += 1u) {
-        let position_radius = lights.local_position_radius[light_index];
-        let to_light = position_radius.xyz - position;
-        let distance_to_light = length(to_light);
-        let light_direction = to_light / max(distance_to_light, 0.0001);
-        let light_to_surface = -light_direction;
-        let attenuation = pow(clamp(1.0 - distance_to_light / position_radius.w, 0.0, 1.0), 2.0);
-        let cone = spot_cone_attenuation(light_index, light_to_surface);
-        let color_intensity = lights.local_color_intensity[light_index];
-        radiance += albedo
-            * color_intensity.rgb
-            * color_intensity.w
-            * attenuation
-            * practical_spot_fill(light_index, cone)
-            * max(dot(normal, light_direction), 0.0)
-            * 0.72;
-    }
-    return radiance + proxy_emissive_radiance(position);
-}
-
-fn proxy_hit(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, t: f32) -> ProxyHit {
-    return ProxyHit(t, proxy_direct_radiance(position, normal, albedo), normal, 1.0);
-}
-
-fn trace_alley_proxy(origin: vec3<f32>, ray: vec3<f32>) -> ProxyHit {
+fn trace_scene_proxy(origin: vec3<f32>, ray: vec3<f32>) -> ProxyHit {
     var best = ProxyHit(1000000.0, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), 0.0);
-
-    if abs(ray.y) > 0.0001 {
-        let t = (-0.06 - origin.y) / ray.y;
-        let p = origin + ray * t;
-        if t > 0.04 && t < best.t && abs(p.x) < 3.65 && p.z > -18.6 && p.z < 8.5 {
-            best = proxy_hit(p, vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.045, 0.052, 0.055), t);
+    let ray_sign = select(vec3<f32>(-1.0), vec3<f32>(1.0), ray >= vec3<f32>(0.0));
+    let safe_ray = select(ray_sign * vec3<f32>(0.0001), ray, abs(ray) > vec3<f32>(0.0001));
+    let inv_ray = vec3<f32>(1.0) / safe_ray;
+    let proxy_count = min(reflection_proxies.count.x, 24u);
+    for (var index = 0u; index < proxy_count; index += 1u) {
+        let bounds_min = reflection_proxies.bounds_min[index].xyz;
+        let bounds_max = reflection_proxies.bounds_max[index].xyz;
+        let t0 = (bounds_min - origin) * inv_ray;
+        let t1 = (bounds_max - origin) * inv_ray;
+        let tmin3 = min(t0, t1);
+        let tmax3 = max(t0, t1);
+        let near_t = max(max(tmin3.x, tmin3.y), tmin3.z);
+        let far_t = min(min(tmax3.x, tmax3.y), tmax3.z);
+        if far_t < max(near_t, 0.04) || near_t >= best.t {
+            continue;
         }
+        let hit_position = origin + ray * near_t;
+        let center = (bounds_min + bounds_max) * 0.5;
+        let half_extent = max((bounds_max - bounds_min) * 0.5, vec3<f32>(0.001));
+        let local = (hit_position - center) / half_extent;
+        let abs_local = abs(local);
+        var hit_normal = vec3<f32>(0.0, 1.0, 0.0);
+        if abs_local.x > abs_local.y && abs_local.x > abs_local.z {
+            hit_normal = vec3<f32>(sign(local.x), 0.0, 0.0);
+        } else if abs_local.y > abs_local.z {
+            hit_normal = vec3<f32>(0.0, sign(local.y), 0.0);
+        } else {
+            hit_normal = vec3<f32>(0.0, 0.0, sign(local.z));
+        }
+        let proxy_radiance = reflection_proxies.radiance[index];
+        let facing = smoothstep(-0.18, 0.42, dot(hit_normal, -ray));
+        best = ProxyHit(near_t, proxy_radiance.rgb * max(proxy_radiance.a, 0.05), hit_normal, facing);
     }
-
-    if abs(ray.x) > 0.0001 {
-        let left_t = (-5.0 - origin.x) / ray.x;
-        let left_p = origin + ray * left_t;
-        if left_t > 0.04 && left_t < best.t && left_p.y > 0.0 && left_p.y < 7.0 && left_p.z > -18.6 && left_p.z < 8.5 {
-            best = proxy_hit(left_p, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.18, 0.125, 0.10), left_t);
-        }
-
-        let right_t = (5.0 - origin.x) / ray.x;
-        let right_p = origin + ray * right_t;
-        if right_t > 0.04 && right_t < best.t && right_p.y > 0.0 && right_p.y < 7.0 && right_p.z > -18.6 && right_p.z < 8.5 {
-            best = proxy_hit(right_p, vec3<f32>(-1.0, 0.0, 0.0), vec3<f32>(0.18, 0.125, 0.10), right_t);
-        }
-    }
-
-    if abs(ray.z) > 0.0001 {
-        let end_t = (-18.45 - origin.z) / ray.z;
-        let end_p = origin + ray * end_t;
-        if end_t > 0.04 && end_t < best.t && abs(end_p.x) < 5.1 && end_p.y > 0.0 && end_p.y < 7.0 {
-            best = proxy_hit(end_p, vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.17, 0.12, 0.10), end_t);
-        }
-    }
-
     return best;
+}
+
+fn temporal_reconstruct_reflection(
+    source_pixel: vec2<u32>,
+    source_size: vec2<u32>,
+    output_size: vec2<u32>,
+    current_reflection: vec3<f32>,
+    current_roughness: f32
+) -> vec3<f32> {
+    if frame.counters.x == 0u {
+        return current_reflection;
+    }
+    let uv = (vec2<f32>(source_pixel) + 0.5) / vec2<f32>(source_size);
+    let motion = textureLoad(motion_vectors, vec2<i32>(source_pixel), 0).rg;
+    let previous_uv = uv - motion;
+    if any(previous_uv < vec2<f32>(0.0)) || any(previous_uv > vec2<f32>(1.0)) {
+        return current_reflection;
+    }
+    let history_pixel = clamp(
+        vec2<i32>(previous_uv * vec2<f32>(output_size)),
+        vec2<i32>(0),
+        vec2<i32>(output_size) - vec2<i32>(1)
+    );
+    let history_sample = textureLoad(reflection_history, history_pixel, 0);
+    let motion_rejection = smoothstep(0.010, 0.085, length(motion));
+    let roughness_rejection = smoothstep(0.045, 0.22, abs(history_sample.a - current_roughness));
+    let history_weight = 0.58 * (1.0 - motion_rejection) * (1.0 - roughness_rejection);
+    return mix(current_reflection, history_sample.rgb, history_weight);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -241,8 +233,8 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
     let uv = (vec2<f32>(source_pixel) + 0.5) / vec2<f32>(source_size);
     let world_position = reconstruct_world_position(uv, scene_depth);
     let wetness = rain_wetness(world_position, normal, surface);
-    let effective_roughness = mix(surface.x, 0.055, wetness * 0.72);
-    if effective_roughness > 0.68 && wetness < 0.08 {
+    let effective_roughness = mix(surface.x, 0.032, wetness * 0.84);
+    if effective_roughness > 0.72 && wetness < 0.06 {
         textureStore(output_reflection, vec2<i32>(invocation.xy), vec4<f32>(0.0));
         return;
     }
@@ -281,21 +273,40 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
             * practical_spot_fill(light_index, cone)
             * alignment;
     }
-    let proxy_hit_result = trace_alley_proxy(world_position + normal * 0.045, reflected);
+    let ssr_size = textureDimensions(half_resolution_ssr);
+    let ssr_uv = (vec2<f32>(source_pixel) + 0.5) / vec2<f32>(source_size);
+    let ssr_pixel = clamp(
+        vec2<i32>(ssr_uv * vec2<f32>(ssr_size)),
+        vec2<i32>(0),
+        vec2<i32>(ssr_size) - vec2<i32>(1)
+    );
+    let ssr_sample = textureLoad(half_resolution_ssr, ssr_pixel, 0);
+    let ssr_hit = clamp(ssr_sample.a, 0.0, 1.0);
+    let ssr_reflection = ssr_sample.rgb * mix(1.0, 0.66, effective_roughness) * ssr_hit;
+    let proxy_hit_result = trace_scene_proxy(world_position + normal * 0.045, reflected);
     let proxy_reflection = proxy_hit_result.radiance
-        * mix(1.0, 0.62, effective_roughness)
-        * (1.0 / (1.0 + proxy_hit_result.t * 0.025))
+        * mix(1.0, 0.72, effective_roughness)
+        * (1.0 / (1.0 + proxy_hit_result.t * 0.018))
         * proxy_hit_result.hit;
-    let wet_puddle = smoothstep(0.14, 0.78, wetness);
-    let view_fresnel = 0.025 + pow(1.0 - max(dot(normal, -view_ray), 0.0), 5.0) * 0.58;
+    let wet_puddle = smoothstep(0.06, 0.64, wetness);
+    let view_fresnel = 0.035 + pow(1.0 - max(dot(normal, -view_ray), 0.0), 5.0) * 0.68;
     let response = clamp(
-        (1.0 - effective_roughness) * (view_fresnel + surface.y * 0.34) * (0.35 + wet_puddle * 0.65),
+        (1.0 - effective_roughness) * (view_fresnel + surface.y * 0.36) * (0.48 + wet_puddle * 0.88),
         0.0,
-        0.72
+        1.05
+    );
+    let traced_reflection = mix(proxy_reflection, ssr_reflection, ssr_hit);
+    let current_reflection = (sky * 0.62 + moon + local_reflection * 1.18 + traced_reflection * 1.24) * response;
+    let temporal_reflection = temporal_reconstruct_reflection(
+        source_pixel,
+        source_size,
+        output_size,
+        current_reflection,
+        effective_roughness
     );
     textureStore(
         output_reflection,
         vec2<i32>(invocation.xy),
-        vec4<f32>((sky * 0.55 + moon + local_reflection + proxy_reflection) * response, effective_roughness)
+        vec4<f32>(temporal_reflection, effective_roughness)
     );
 }

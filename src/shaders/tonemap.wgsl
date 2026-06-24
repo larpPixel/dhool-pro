@@ -1,5 +1,6 @@
 @group(0) @binding(0) var scene_hdr: texture_2d<f32>;
 @group(0) @binding(1) var bloom_tex: texture_2d<f32>;
+@group(0) @binding(2) var volumetric_fog: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -64,9 +65,29 @@ fn sample_bloom(uv: vec2<f32>) -> vec3<f32> {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+fn load_fog(pixel: vec2<i32>) -> vec4<f32> {
+    let size = textureDimensions(volumetric_fog);
+    let clamped = clamp(pixel, vec2<i32>(0), vec2<i32>(size) - vec2<i32>(1));
+    return textureLoad(volumetric_fog, clamped, 0);
+}
+
+fn sample_fog(uv: vec2<f32>) -> vec4<f32> {
+    let size = textureDimensions(volumetric_fog);
+    let coord = uv * vec2<f32>(size) - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(coord));
+    let f = fract(coord);
+    let a = load_fog(base);
+    let b = load_fog(base + vec2<i32>(1, 0));
+    let c = load_fog(base + vec2<i32>(0, 1));
+    let d = load_fog(base + vec2<i32>(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(input.position.xy);
-    let hdr = load_hdr(pixel) + sample_bloom(input.uv) * 0.30;
+    let fog = sample_fog(input.uv);
+    let lit = load_hdr(pixel) + sample_bloom(input.uv) * 0.30;
+    let hdr = mix(lit, fog.rgb, clamp(fog.a, 0.0, 0.30));
     return vec4<f32>(gt_tonemap(max(hdr, vec3<f32>(0.0))), 1.0);
 }

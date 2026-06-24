@@ -16,6 +16,8 @@ struct AntiAlias {
 @group(0) @binding(2) var scene_depth: texture_depth_2d;
 @group(0) @binding(3) var<uniform> camera: Camera;
 @group(0) @binding(4) var<uniform> aa: AntiAlias;
+@group(0) @binding(5) var motion_vectors: texture_2d<f32>;
+@group(0) @binding(6) var smaa_blend: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -40,55 +42,12 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
-fn luminance(color: vec3<f32>) -> f32 {
-    return dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
-}
-
 fn clamp_pixel(pixel: vec2<i32>, size: vec2<u32>) -> vec2<i32> {
     return clamp(pixel, vec2<i32>(0), vec2<i32>(size) - vec2<i32>(1));
 }
 
 fn load_color(pixel: vec2<i32>, size: vec2<u32>) -> vec3<f32> {
     return textureLoad(current_color, clamp_pixel(pixel, size), 0).rgb;
-}
-
-fn load_depth(pixel: vec2<i32>, size: vec2<u32>) -> f32 {
-    return textureLoad(scene_depth, clamp_pixel(pixel, size), 0);
-}
-
-fn edge_amount(pixel: vec2<i32>, size: vec2<u32>, center: vec3<f32>, center_depth: f32) -> f32 {
-    let left = load_color(pixel + vec2<i32>(-1, 0), size);
-    let right = load_color(pixel + vec2<i32>(1, 0), size);
-    let up = load_color(pixel + vec2<i32>(0, -1), size);
-    let down = load_color(pixel + vec2<i32>(0, 1), size);
-    let center_luma = luminance(center);
-    let color_edge = max(
-        max(abs(center_luma - luminance(left)), abs(center_luma - luminance(right))),
-        max(abs(center_luma - luminance(up)), abs(center_luma - luminance(down)))
-    );
-    let depth_edge = max(
-        max(abs(center_depth - load_depth(pixel + vec2<i32>(-1, 0), size)), abs(center_depth - load_depth(pixel + vec2<i32>(1, 0), size))),
-        max(abs(center_depth - load_depth(pixel + vec2<i32>(0, -1), size)), abs(center_depth - load_depth(pixel + vec2<i32>(0, 1), size)))
-    ) * 18.0;
-    let threshold = aa.params.y;
-    return smoothstep(threshold, threshold * 2.5, max(color_edge, depth_edge));
-}
-
-fn smaa_like_resolve(pixel: vec2<i32>, size: vec2<u32>, center: vec3<f32>, edge: f32) -> vec3<f32> {
-    if edge <= 0.0 {
-        return center;
-    }
-
-    let left = load_color(pixel + vec2<i32>(-1, 0), size);
-    let right = load_color(pixel + vec2<i32>(1, 0), size);
-    let up = load_color(pixel + vec2<i32>(0, -1), size);
-    let down = load_color(pixel + vec2<i32>(0, 1), size);
-    let horizontal_gradient = abs(luminance(left) - luminance(right));
-    let vertical_gradient = abs(luminance(up) - luminance(down));
-    let horizontal_blend = (left + right) * 0.5;
-    let vertical_blend = (up + down) * 0.5;
-    let blend = select(vertical_blend, horizontal_blend, horizontal_gradient > vertical_gradient);
-    return mix(center, blend, edge * aa.params.z);
 }
 
 fn neighborhood_min(pixel: vec2<i32>, size: vec2<u32>, center: vec3<f32>) -> vec3<f32> {
@@ -109,13 +68,18 @@ fn neighborhood_max(pixel: vec2<i32>, size: vec2<u32>, center: vec3<f32>) -> vec
     return high;
 }
 
-fn history_uv(pixel_uv: vec2<f32>, depth: f32) -> vec2<f32> {
-    let current_clip = vec4<f32>(pixel_uv.x * 2.0 - 1.0, 1.0 - pixel_uv.y * 2.0, depth, 1.0);
-    let world_h = camera.inverse_view_projection * current_clip;
-    let world = vec4<f32>(world_h.xyz / max(world_h.w, 0.00001), 1.0);
-    let previous_clip = aa.previous_view_projection * world;
-    let previous_ndc = previous_clip.xyz / max(previous_clip.w, 0.00001);
-    return previous_ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
+fn smaa_resolve(pixel: vec2<i32>, size: vec2<u32>, center: vec3<f32>) -> vec3<f32> {
+    let blend = textureLoad(smaa_blend, clamp_pixel(pixel, size), 0).rgb;
+    if blend.z <= 0.0001 {
+        return center;
+    }
+    let left = load_color(pixel + vec2<i32>(-1, 0), size);
+    let right = load_color(pixel + vec2<i32>(1, 0), size);
+    let up = load_color(pixel + vec2<i32>(0, -1), size);
+    let down = load_color(pixel + vec2<i32>(0, 1), size);
+    let horizontal = mix(center, (left + right) * 0.5, blend.x);
+    let vertical = mix(center, (up + down) * 0.5, blend.y);
+    return mix(horizontal, vertical, blend.y / max(blend.x + blend.y, 0.0001));
 }
 
 @fragment
@@ -125,12 +89,13 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     let pixel = vec2<i32>(pixel_u);
     let center = textureLoad(current_color, pixel, 0).rgb;
     let depth = textureLoad(scene_depth, pixel, 0);
-    let edge = edge_amount(pixel, size, center, depth);
-    var resolved = smaa_like_resolve(pixel, size, center, edge);
+    var resolved = smaa_resolve(pixel, size, center);
+    let edge_strength = textureLoad(smaa_blend, pixel, 0).b;
 
     if aa.params.x > 0.0 && depth < 0.99999 {
         let uv = (vec2<f32>(pixel_u) + 0.5) / vec2<f32>(size);
-        let previous_uv = history_uv(uv, depth);
+        let motion = textureLoad(motion_vectors, pixel, 0).rg;
+        let previous_uv = uv - motion;
         if all(previous_uv >= vec2<f32>(0.0)) && all(previous_uv <= vec2<f32>(1.0)) {
             let history_size = textureDimensions(history_color);
             let history_pixel = clamp(
@@ -139,10 +104,11 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
                 vec2<i32>(history_size) - vec2<i32>(1)
             );
             let history_sample = textureLoad(history_color, history_pixel, 0).rgb;
-            let low = neighborhood_min(pixel, size, resolved) - vec3<f32>(0.015);
-            let high = neighborhood_max(pixel, size, resolved) + vec3<f32>(0.015);
+            let low = neighborhood_min(pixel, size, resolved) - vec3<f32>(0.018);
+            let high = neighborhood_max(pixel, size, resolved) + vec3<f32>(0.018);
             let clamped_history = clamp(history_sample, low, high);
-            let history_weight = aa.params.x * (1.0 - edge * 0.7);
+            let motion_rejection = smoothstep(0.012, 0.09, length(motion));
+            let history_weight = aa.params.x * (1.0 - edge_strength * 0.55) * (1.0 - motion_rejection * 0.65);
             resolved = mix(resolved, clamped_history, history_weight);
         }
     }

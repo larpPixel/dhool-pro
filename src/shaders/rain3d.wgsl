@@ -226,8 +226,8 @@ fn vs_main(
 
     let tangent = tangent_from_axis(fall_direction);
     let bitangent = safe_normalize(cross(fall_direction, tangent));
-    let radius = 0.0055 + random.x * 0.0075 + layer * 0.0011;
-    let streak_length = 0.38 + random.z * 0.62 + layer * 0.12;
+    let radius = 0.0042 + random.x * 0.0105 + layer * 0.0014;
+    let streak_length = 0.26 + random.z * 0.78 + layer * 0.16;
     let radial = tangent * local.x + bitangent * local.y;
     let world_position = head
         + fall_direction * (local.z * streak_length * 0.5)
@@ -240,7 +240,9 @@ fn vs_main(
     output.position = camera.view_projection * vec4<f32>(world_position, 1.0);
     output.uv = vec2<f32>(fract((f32(instance_index % 11u) + local.x * 0.5 + 0.5) * 0.37), local.z * 0.5 + 0.5);
     output.seed = random.y + layer * 1.37;
-    output.alpha = (0.075 + random.z * 0.085 + layer * 0.020) * lights.weather.x;
+    output.alpha = (0.040 + random.z * 0.135 + layer * 0.018)
+        * (0.46 + hash11(seed + 201.3) * 0.92)
+        * lights.weather.x;
     output.world_position = world_position;
     output.rain_axis = fall_direction;
     output.surface_normal = radial_normal;
@@ -260,21 +262,23 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         * lights.directional_color_intensity.w;
     let edge_transmission = 1.0 - abs(dot(surface_normal, view_direction));
     let light_mask = clamp(
-        smoothstep(0.02, 0.42, luminance(radiance)) * 0.52 + smoothstep(0.02, 0.46, normal_glint) * 0.30,
+        smoothstep(0.025, 0.50, luminance(radiance)) * 0.46 + smoothstep(0.02, 0.52, normal_glint) * 0.34,
         0.0,
-        0.68
+        0.72
     );
     let depth_presence = 1.0 - smoothstep(18.0, 31.0, input.camera_distance);
     let near_presence = 1.0 - smoothstep(2.2, 8.5, input.camera_distance);
+    let depth_breakup = 0.48 + hash11(floor(input.camera_distance * 0.72) + input.seed * 5.1) * 0.70;
+    let segment_breakup = mix(0.34, 1.12, hash11(input.seed * 31.7 + floor(input.uv.y * 11.0) * 3.9));
     let alpha = clamp(
-        streak_alpha * input.alpha * input.boundary_fade * depth_presence * (0.42 + near_presence * 0.58) * (0.48 + edge_transmission * 0.52) * light_mask,
+        streak_alpha * segment_breakup * input.alpha * input.boundary_fade * depth_presence * depth_breakup * (0.34 + near_presence * 0.58) * (0.46 + edge_transmission * 0.54) * light_mask,
         0.0,
-        0.34
+        0.30
     );
-    let water_tint = vec3<f32>(0.16, 0.23, 0.31);
+    let water_tint = vec3<f32>(0.13, 0.17, 0.22);
     let depth_haze = smoothstep(8.0, 26.0, input.camera_distance);
     let lit_water = mix(water_tint, radiance * 0.34, vec3<f32>(0.62))
         * (0.50 + edge_transmission * 0.34 + streak_alpha * 0.16 + near_presence * 0.12);
-    let hdr_color = mix(lit_water, lights.sky.rgb * 0.22, depth_haze * 0.42);
+    let hdr_color = mix(lit_water, lights.sky.rgb * 0.16, depth_haze * 0.28);
     return vec4<f32>(max(hdr_color, vec3<f32>(0.0)), alpha);
 }

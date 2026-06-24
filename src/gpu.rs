@@ -22,15 +22,25 @@ const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PBR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const REFLECTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+const SMAA_EDGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
+const SMAA_BLEND_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+const HIZ_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const VOLUMETRIC_FOG_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const CAMERA_MOVE_SPEED: f32 = 4.0;
 const CAMERA_LOOK_SPEED: f32 = 1.55;
 const RAIN_DROP_COUNT: u32 = 4_096;
 const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
 const MAX_GPU_POINT_LIGHTS: usize = 4;
+const MAX_REFLECTION_PROXIES: usize = 24;
 const SHADOW_MAP_RESOLUTION: u32 = 4_096;
 const LOCAL_SHADOW_MAP_RESOLUTION: u32 = 1_024;
 const BLOOM_SCALE: u32 = 4;
+const HIZ_SCALE: u32 = 2;
+const FOG_SCALE: u32 = 2;
+const SSR_SCALE: u32 = 2;
 const EMISSIVE_SCALE: f32 = 12.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,7 +147,7 @@ impl ApplicationHandler for LiveApplication {
             renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type
         );
         println!(
-            "live pipeline: shadow maps -> depth prepass/PBR G-buffer -> compute reflections -> HDR lighting/rain -> Kawase bloom + GT resolve -> SMAA T2x"
+            "live pipeline: cached shadows -> selective depth prepass/PBR+motion G-buffer -> R32 depth/Hi-Z/fog -> SSR-first temporal reflections -> light-volume guarded HDR lighting/rain -> Kawase bloom + GT resolve -> SMAA edge/blend/T2x"
         );
         window.set_title(&format!(
             "Dhool Pro | {} | vendor-agnostic compute",
@@ -261,6 +271,7 @@ struct CameraUniform {
     inverse_view_projection: [[f32; 4]; 4],
     position_time: [f32; 4],
     viewport: [f32; 4],
+    previous_view_projection: [[f32; 4]; 4],
 }
 
 #[repr(C)]
@@ -298,6 +309,15 @@ struct LightUniform {
     local_color_intensity: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
     local_direction_outer: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
     local_inner_shadow: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct ReflectionProxyUniform {
+    count: [u32; 4],
+    bounds_min: [[f32; 4]; MAX_REFLECTION_PROXIES],
+    bounds_max: [[f32; 4]; MAX_REFLECTION_PROXIES],
+    radiance: [[f32; 4]; MAX_REFLECTION_PROXIES],
 }
 
 impl LightUniform {
@@ -488,34 +508,63 @@ struct GBuffer {
     _albedo: wgpu::Texture,
     _normal: wgpu::Texture,
     _pbr: wgpu::Texture,
+    _motion: wgpu::Texture,
     _depth: wgpu::Texture,
+    _depth_copy: wgpu::Texture,
+    _hiz: wgpu::Texture,
+    _ssr: wgpu::Texture,
     _reflection: wgpu::Texture,
+    _rt_history_a: wgpu::Texture,
+    _rt_history_b: wgpu::Texture,
+    _volumetric_fog: wgpu::Texture,
     _lighting_hdr: wgpu::Texture,
     _bloom_a: wgpu::Texture,
     _bloom_b: wgpu::Texture,
     _tone_mapped: wgpu::Texture,
+    _smaa_edges: wgpu::Texture,
+    _smaa_blend: wgpu::Texture,
     _aa_history_a: wgpu::Texture,
     _aa_history_b: wgpu::Texture,
     albedo: wgpu::TextureView,
     normal: wgpu::TextureView,
     pbr: wgpu::TextureView,
+    motion: wgpu::TextureView,
     depth: wgpu::TextureView,
+    _depth_copy_view: wgpu::TextureView,
+    _hiz_view: wgpu::TextureView,
+    _ssr_view: wgpu::TextureView,
     lighting_hdr: wgpu::TextureView,
     bloom_a: wgpu::TextureView,
     bloom_b: wgpu::TextureView,
     tone_mapped: wgpu::TextureView,
+    _volumetric_fog_view: wgpu::TextureView,
+    smaa_edges: wgpu::TextureView,
+    smaa_blend: wgpu::TextureView,
     aa_history_a: wgpu::TextureView,
     aa_history_b: wgpu::TextureView,
-    reflection_bind_group: wgpu::BindGroup,
+    reflection_bind_group_a: wgpu::BindGroup,
+    reflection_bind_group_b: wgpu::BindGroup,
     lighting_bind_group: wgpu::BindGroup,
     bloom_extract_bind_group: wgpu::BindGroup,
     bloom_blur_a_bind_group: wgpu::BindGroup,
     bloom_blur_b_bind_group: wgpu::BindGroup,
     tonemap_bind_group: wgpu::BindGroup,
+    depth_copy_bind_group: wgpu::BindGroup,
+    hiz_bind_group: wgpu::BindGroup,
+    fog_bind_group: wgpu::BindGroup,
+    ssr_bind_group: wgpu::BindGroup,
+    smaa_edge_bind_group: wgpu::BindGroup,
+    smaa_blend_bind_group: wgpu::BindGroup,
     aa_bind_group_a: wgpu::BindGroup,
     aa_bind_group_b: wgpu::BindGroup,
     reflection_width: u32,
     reflection_height: u32,
+    hiz_width: u32,
+    hiz_height: u32,
+    ssr_width: u32,
+    ssr_height: u32,
+    fog_width: u32,
+    fog_height: u32,
 }
 
 struct GpuRenderer {
@@ -533,6 +582,7 @@ struct GpuRenderer {
     camera_bind_group: wgpu::BindGroup,
     frame_buffer: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
+    _reflection_proxy_buffer: wgpu::Buffer,
     aa_buffer: wgpu::Buffer,
     shadow_camera_buffer: wgpu::Buffer,
     shadow_camera_bind_group: wgpu::BindGroup,
@@ -546,9 +596,15 @@ struct GpuRenderer {
     _local_shadow_camera_buffers: Vec<wgpu::Buffer>,
     local_shadow_bind_groups: Vec<wgpu::BindGroup>,
     shadowed_local_light_indices: Vec<usize>,
+    shadow_cache_ready: bool,
+    local_shadow_cache_ready: Vec<bool>,
     depth_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     geometry_pipeline: wgpu::RenderPipeline,
+    depth_copy_pipeline: wgpu::RenderPipeline,
+    hiz_pipeline: wgpu::ComputePipeline,
+    fog_pipeline: wgpu::ComputePipeline,
+    ssr_pipeline: wgpu::ComputePipeline,
     reflection_pipeline: wgpu::ComputePipeline,
     lighting_pipeline: wgpu::RenderPipeline,
     bloom_extract_pipeline: wgpu::RenderPipeline,
@@ -556,13 +612,21 @@ struct GpuRenderer {
     bloom_blur_vertical_pipeline: wgpu::RenderPipeline,
     tonemap_pipeline: wgpu::RenderPipeline,
     aa_pipeline: wgpu::RenderPipeline,
+    smaa_edge_pipeline: wgpu::RenderPipeline,
+    smaa_blend_pipeline: wgpu::RenderPipeline,
     rain_pipeline: wgpu::RenderPipeline,
     rain: RainTextures,
     reflection_layout: wgpu::BindGroupLayout,
     lighting_layout: wgpu::BindGroupLayout,
     bloom_layout: wgpu::BindGroupLayout,
     tonemap_layout: wgpu::BindGroupLayout,
+    depth_copy_layout: wgpu::BindGroupLayout,
+    hiz_layout: wgpu::BindGroupLayout,
+    fog_layout: wgpu::BindGroupLayout,
+    ssr_layout: wgpu::BindGroupLayout,
     aa_layout: wgpu::BindGroupLayout,
+    smaa_edge_layout: wgpu::BindGroupLayout,
+    smaa_blend_layout: wgpu::BindGroupLayout,
     bloom_format: wgpu::TextureFormat,
     gbuffer: GBuffer,
     started: Instant,
@@ -640,6 +704,12 @@ impl GpuRenderer {
         let lighting_layout = lighting_layout(&device);
         let bloom_layout = bloom_layout(&device);
         let tonemap_layout = tonemap_layout(&device);
+        let depth_copy_layout = depth_copy_layout(&device);
+        let hiz_layout = hiz_layout(&device);
+        let fog_layout = fog_layout(&device);
+        let ssr_layout = ssr_layout(&device);
+        let smaa_edge_layout = smaa_edge_layout(&device);
+        let smaa_blend_layout = smaa_blend_layout(&device);
         let aa_layout = aa_layout(&device);
         let rain_layout = rain_layout(&device);
 
@@ -673,6 +743,13 @@ impl GpuRenderer {
             contents: bytemuck::bytes_of(&light_uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let reflection_proxy_uniform = reflection_proxy_uniform(&scene);
+        let reflection_proxy_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("reflection-proxy-uniform"),
+                contents: bytemuck::bytes_of(&reflection_proxy_uniform),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let shadow_camera = shadow_camera_for_scene(light_uniform, &vertices);
         let shadow_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("shadow-camera-uniform"),
@@ -744,6 +821,10 @@ impl GpuRenderer {
         let shadow_pipeline = create_shadow_pipeline(&device, &camera_layout);
         let geometry_pipeline =
             create_geometry_pipeline(&device, &camera_layout, &material_layout, config.format);
+        let depth_copy_pipeline = create_depth_copy_pipeline(&device, &depth_copy_layout);
+        let hiz_pipeline = create_hiz_pipeline(&device, &hiz_layout);
+        let fog_pipeline = create_fog_pipeline(&device, &fog_layout);
+        let ssr_pipeline = create_ssr_pipeline(&device, &ssr_layout);
         let reflection_pipeline = create_reflection_pipeline(&device, &reflection_layout);
         let lighting_pipeline = create_lighting_pipeline(&device, &lighting_layout);
         let bloom_extract_pipeline =
@@ -753,6 +834,8 @@ impl GpuRenderer {
         let bloom_blur_vertical_pipeline =
             create_bloom_pipeline(&device, &bloom_layout, bloom_format, "fs_blur_vertical");
         let tonemap_pipeline = create_tonemap_pipeline(&device, &tonemap_layout, config.format);
+        let smaa_edge_pipeline = create_smaa_edge_pipeline(&device, &smaa_edge_layout);
+        let smaa_blend_pipeline = create_smaa_blend_pipeline(&device, &smaa_blend_layout);
         let rain_pipeline = create_rain_pipeline(&device, &rain_layout, HDR_FORMAT);
         let aa_pipeline = create_aa_pipeline(&device, &aa_layout, config.format);
         let gbuffer = GBuffer::new(
@@ -765,6 +848,12 @@ impl GpuRenderer {
             &lighting_layout,
             &bloom_layout,
             &tonemap_layout,
+            &depth_copy_layout,
+            &hiz_layout,
+            &fog_layout,
+            &ssr_layout,
+            &smaa_edge_layout,
+            &smaa_blend_layout,
             &aa_layout,
             &frame_buffer,
             &camera_buffer,
@@ -773,6 +862,7 @@ impl GpuRenderer {
             &shadow_sampler,
             &shadow_camera_buffer,
             &light_buffer,
+            &reflection_proxy_buffer,
             &local_shadow_array_view,
             &local_shadow_buffer,
         );
@@ -793,6 +883,7 @@ impl GpuRenderer {
             frame_buffer,
             aa_buffer,
             light_buffer,
+            _reflection_proxy_buffer: reflection_proxy_buffer,
             shadow_camera_buffer,
             shadow_camera_bind_group,
             _shadow_texture: shadow_texture,
@@ -805,9 +896,15 @@ impl GpuRenderer {
             _local_shadow_camera_buffers: local_shadow_camera_buffers,
             local_shadow_bind_groups,
             shadowed_local_light_indices: local_shadow_setup.shadowed_indices,
+            shadow_cache_ready: false,
+            local_shadow_cache_ready: vec![false; MAX_GPU_POINT_LIGHTS],
             depth_pipeline,
             shadow_pipeline,
             geometry_pipeline,
+            depth_copy_pipeline,
+            hiz_pipeline,
+            fog_pipeline,
+            ssr_pipeline,
             reflection_pipeline,
             lighting_pipeline,
             bloom_extract_pipeline,
@@ -815,13 +912,21 @@ impl GpuRenderer {
             bloom_blur_vertical_pipeline,
             tonemap_pipeline,
             aa_pipeline,
+            smaa_edge_pipeline,
+            smaa_blend_pipeline,
             rain_pipeline,
             rain,
             reflection_layout,
             lighting_layout,
             bloom_layout,
             tonemap_layout,
+            depth_copy_layout,
+            hiz_layout,
+            fog_layout,
+            ssr_layout,
             aa_layout,
+            smaa_edge_layout,
+            smaa_blend_layout,
             bloom_format,
             gbuffer,
             started: Instant::now(),
@@ -855,6 +960,12 @@ impl GpuRenderer {
             &self.lighting_layout,
             &self.bloom_layout,
             &self.tonemap_layout,
+            &self.depth_copy_layout,
+            &self.hiz_layout,
+            &self.fog_layout,
+            &self.ssr_layout,
+            &self.smaa_edge_layout,
+            &self.smaa_blend_layout,
             &self.aa_layout,
             &self.frame_buffer,
             &self.camera_buffer,
@@ -863,6 +974,7 @@ impl GpuRenderer {
             &self.shadow_sampler,
             &self.shadow_camera_buffer,
             &self.light_buffer,
+            &self._reflection_proxy_buffer,
             &self.local_shadow_array_view,
             &self.local_shadow_buffer,
         );
@@ -970,7 +1082,11 @@ impl GpuRenderer {
             40.0,
         );
         let view_projection = projection * view;
-        self.previous_view_projection = self.current_view_projection;
+        self.previous_view_projection = if self.frame_index == 0 {
+            view_projection
+        } else {
+            self.current_view_projection
+        };
         self.current_view_projection = view_projection;
         let viewport = [
             self.config.width as f32,
@@ -983,6 +1099,7 @@ impl GpuRenderer {
             inverse_view_projection: view_projection.inverse().to_cols_array_2d(),
             position_time: [eye.x, eye.y, eye.z, elapsed],
             viewport,
+            previous_view_projection: self.previous_view_projection.to_cols_array_2d(),
         };
         let frame = FrameUniform {
             dimensions: [
@@ -1037,63 +1154,80 @@ impl GpuRenderer {
                 label: Some("dhool-frame"),
             });
 
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("cached-directional-shadow-map"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+        if !self.shadow_cache_ready {
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("cached-directional-shadow-map"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.shadow_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.shadow_pipeline);
-            pass.set_bind_group(0, &self.shadow_camera_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in &self.batches {
-                if batch.casts_shadow {
-                    pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.shadow_pipeline);
+                pass.set_bind_group(0, &self.shadow_camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                for batch in &self.batches {
+                    if batch.casts_shadow {
+                        pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                    }
                 }
             }
+            self.shadow_cache_ready = true;
         }
 
-        for &light_index in &self.shadowed_local_light_indices {
+        for light_slot in 0..self.shadowed_local_light_indices.len() {
+            let light_index = self.shadowed_local_light_indices[light_slot];
+            if self
+                .local_shadow_cache_ready
+                .get(light_index)
+                .copied()
+                .unwrap_or(true)
+            {
+                continue;
+            }
             let Some(view) = self.local_shadow_views.get(light_index) else {
                 continue;
             };
             let Some(bind_group) = self.local_shadow_bind_groups.get(light_index) else {
                 continue;
             };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("cached-local-shadow-map"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("cached-local-shadow-map"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.shadow_pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in &self.batches {
-                if batch.casts_shadow {
-                    pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.shadow_pipeline);
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                for batch in &self.batches {
+                    if batch.casts_shadow {
+                        pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                    }
                 }
+            }
+            if let Some(cache_ready) = self.local_shadow_cache_ready.get_mut(light_index) {
+                *cache_ready = true;
             }
         }
 
@@ -1126,17 +1260,10 @@ impl GpuRenderer {
 
         {
             let color_attachments = [
-                color_attachment(&self.gbuffer.albedo, wgpu::Color::BLACK),
-                color_attachment(&self.gbuffer.normal, wgpu::Color::BLACK),
-                color_attachment(
-                    &self.gbuffer.pbr,
-                    wgpu::Color {
-                        r: 1.0,
-                        g: 0.0,
-                        b: 1.0,
-                        a: 0.0,
-                    },
-                ),
+                load_color_attachment(&self.gbuffer.albedo),
+                load_color_attachment(&self.gbuffer.normal),
+                load_color_attachment(&self.gbuffer.pbr),
+                color_attachment(&self.gbuffer.motion, wgpu::Color::BLACK),
             ];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("base-pass-gbuffer"),
@@ -1157,23 +1284,107 @@ impl GpuRenderer {
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in &self.batches {
-                pass.set_bind_group(1, &self.materials[batch.material_index].bind_group, &[]);
-                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+            for prepass_eligible in [false, true] {
+                for batch in self
+                    .batches
+                    .iter()
+                    .filter(|batch| batch.prepass_eligible == prepass_eligible)
+                {
+                    pass.set_bind_group(1, &self.materials[batch.material_index].bind_group, &[]);
+                    pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                }
             }
         }
 
         {
+            let color_attachments = [load_color_attachment(&self.gbuffer._depth_copy_view)];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("depth-copy-r32f-fullscreen"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.depth_copy_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.depth_copy_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("vendor-agnostic-compute-reflections"),
+                label: Some("hiz-generation-min-max-discontinuity"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.hiz_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.hiz_bind_group, &[]);
+            pass.dispatch_workgroups(
+                self.gbuffer.hiz_width.div_ceil(8),
+                self.gbuffer.hiz_height.div_ceil(8),
+                1,
+            );
+        }
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("half-resolution-ssr-first-layer"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.ssr_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.ssr_bind_group, &[]);
+            pass.dispatch_workgroups(
+                self.gbuffer.ssr_width.div_ceil(8),
+                self.gbuffer.ssr_height.div_ceil(8),
+                1,
+            );
+        }
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("blue-noise-volumetric-fog"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.fog_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.fog_bind_group, &[]);
+            pass.dispatch_workgroups(
+                self.gbuffer.fog_width.div_ceil(8),
+                self.gbuffer.fog_height.div_ceil(8),
+                1,
+            );
+        }
+
+        {
+            let (reflection_bind_group, reflection_history_write) = if self.frame_index & 1 == 0 {
+                (
+                    &self.gbuffer.reflection_bind_group_a,
+                    &self.gbuffer._rt_history_b,
+                )
+            } else {
+                (
+                    &self.gbuffer.reflection_bind_group_b,
+                    &self.gbuffer._rt_history_a,
+                )
+            };
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("ssr-first-temporal-reflections"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.reflection_pipeline);
-            pass.set_bind_group(0, &self.gbuffer.reflection_bind_group, &[]);
+            pass.set_bind_group(0, reflection_bind_group, &[]);
             pass.dispatch_workgroups(
                 self.gbuffer.reflection_width.div_ceil(8),
                 self.gbuffer.reflection_height.div_ceil(8),
                 1,
+            );
+            drop(pass);
+            encoder.copy_texture_to_texture(
+                self.gbuffer._reflection.as_image_copy(),
+                reflection_history_write.as_image_copy(),
+                wgpu::Extent3d {
+                    width: self.gbuffer.reflection_width,
+                    height: self.gbuffer.reflection_height,
+                    depth_or_array_layers: 1,
+                },
             );
         }
 
@@ -1323,6 +1534,42 @@ impl GpuRenderer {
         }
 
         {
+            let color_attachments = [color_attachment(
+                &self.gbuffer.smaa_edges,
+                wgpu::Color::BLACK,
+            )];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("smaa-edge-detect"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.smaa_edge_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.smaa_edge_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let color_attachments = [color_attachment(
+                &self.gbuffer.smaa_blend,
+                wgpu::Color::BLACK,
+            )];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("smaa-blend-weights"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.smaa_blend_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.smaa_blend_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
             let (aa_bind_group, history_write) = if self.frame_index & 1 == 0 {
                 (&self.gbuffer.aa_bind_group_a, &self.gbuffer.aa_history_b)
             } else {
@@ -1349,7 +1596,7 @@ impl GpuRenderer {
                 }),
             ];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("smaa-t2x-edge-persistence-resolve"),
+                label: Some("smaa-t2x-motion-vector-resolve"),
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -1380,6 +1627,12 @@ impl GBuffer {
         lighting_layout: &wgpu::BindGroupLayout,
         bloom_layout: &wgpu::BindGroupLayout,
         tonemap_layout: &wgpu::BindGroupLayout,
+        depth_copy_layout: &wgpu::BindGroupLayout,
+        hiz_layout: &wgpu::BindGroupLayout,
+        fog_layout: &wgpu::BindGroupLayout,
+        ssr_layout: &wgpu::BindGroupLayout,
+        smaa_edge_layout: &wgpu::BindGroupLayout,
+        smaa_blend_layout: &wgpu::BindGroupLayout,
         aa_layout: &wgpu::BindGroupLayout,
         frame_buffer: &wgpu::Buffer,
         camera_buffer: &wgpu::Buffer,
@@ -1388,6 +1641,7 @@ impl GBuffer {
         shadow_sampler: &wgpu::Sampler,
         shadow_camera_buffer: &wgpu::Buffer,
         light_buffer: &wgpu::Buffer,
+        reflection_proxy_buffer: &wgpu::Buffer,
         local_shadow_view: &wgpu::TextureView,
         local_shadow_buffer: &wgpu::Buffer,
     ) -> Self {
@@ -1397,7 +1651,38 @@ impl GBuffer {
             render_texture(device, "gbuffer-normal-flags", width, height, NORMAL_FORMAT);
         let (pbr_texture, pbr) =
             render_texture(device, "gbuffer-pbr-material", width, height, PBR_FORMAT);
+        let (motion_texture, motion) =
+            render_texture(device, "motion-vectors-rg16", width, height, MOTION_FORMAT);
         let (depth_texture, depth) = depth_texture(device, width, height);
+        let (depth_copy_texture, depth_copy) =
+            render_texture(device, "depth-copy-r32f", width, height, DEPTH_COPY_FORMAT);
+        let hiz_width = width.div_ceil(HIZ_SCALE).max(1);
+        let hiz_height = height.div_ceil(HIZ_SCALE).max(1);
+        let (hiz_texture, hiz) = storage_texture(
+            device,
+            "hiz-min-max-discontinuity",
+            hiz_width,
+            hiz_height,
+            HIZ_FORMAT,
+        );
+        let ssr_width = width.div_ceil(SSR_SCALE).max(1);
+        let ssr_height = height.div_ceil(SSR_SCALE).max(1);
+        let (ssr_texture, ssr) = storage_texture(
+            device,
+            "half-resolution-ssr",
+            ssr_width,
+            ssr_height,
+            REFLECTION_FORMAT,
+        );
+        let fog_width = width.div_ceil(FOG_SCALE).max(1);
+        let fog_height = height.div_ceil(FOG_SCALE).max(1);
+        let (fog_texture, volumetric_fog) = storage_texture(
+            device,
+            "blue-noise-volumetric-fog",
+            fog_width,
+            fog_height,
+            VOLUMETRIC_FOG_FORMAT,
+        );
         let (lighting_texture, lighting_hdr) =
             render_texture(device, "hdr-lighting-rgba16f", width, height, HDR_FORMAT);
         let bloom_width = width.div_ceil(BLOOM_SCALE).max(1);
@@ -1418,6 +1703,20 @@ impl GBuffer {
         );
         let (tone_texture, tone_mapped) =
             render_texture(device, "tone-mapped-rgb10a2", width, height, surface_format);
+        let (smaa_edge_texture, smaa_edges) = render_texture(
+            device,
+            "smaa-edge-mask-rg8",
+            width,
+            height,
+            SMAA_EDGE_FORMAT,
+        );
+        let (smaa_blend_texture, smaa_blend) = render_texture(
+            device,
+            "smaa-blend-mask-rgba16",
+            width,
+            height,
+            SMAA_BLEND_FORMAT,
+        );
         let (history_texture_a, aa_history_a) =
             render_texture(device, "smaa-t2x-history-a", width, height, surface_format);
         let (history_texture_b, aa_history_b) =
@@ -1435,22 +1734,33 @@ impl GBuffer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: REFLECTION_FORMAT,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let reflection = reflection_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let reflection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("reflection-bind-group"),
-            layout: reflection_layout,
+        let (rt_history_texture_a, rt_history_a) = reflection_history_texture(
+            device,
+            "two-frame-rt-history-a",
+            reflection_width,
+            reflection_height,
+        );
+        let (rt_history_texture_b, rt_history_b) = reflection_history_texture(
+            device,
+            "two-frame-rt-history-b",
+            reflection_width,
+            reflection_height,
+        );
+        let ssr_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("half-resolution-ssr-bind-group"),
+            layout: ssr_layout,
             entries: &[
-                texture_entry(0, &normal),
-                texture_entry(1, &pbr),
-                texture_entry(2, &depth),
-                texture_entry(3, &reflection),
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: frame_buffer.as_entire_binding(),
-                },
+                texture_entry(0, &albedo),
+                texture_entry(1, &normal),
+                texture_entry(2, &pbr),
+                texture_entry(3, &depth),
+                texture_entry(4, &ssr),
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: camera_buffer.as_entire_binding(),
@@ -1459,6 +1769,66 @@ impl GBuffer {
                     binding: 6,
                     resource: light_buffer.as_entire_binding(),
                 },
+            ],
+        });
+        let reflection_bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("reflection-bind-group-history-a"),
+            layout: reflection_layout,
+            entries: &[
+                texture_entry(0, &albedo),
+                texture_entry(1, &normal),
+                texture_entry(2, &pbr),
+                texture_entry(3, &depth),
+                texture_entry(4, &reflection),
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: frame_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: light_buffer.as_entire_binding(),
+                },
+                texture_entry(8, &rt_history_a),
+                texture_entry(9, &motion),
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: reflection_proxy_buffer.as_entire_binding(),
+                },
+                texture_entry(11, &ssr),
+            ],
+        });
+        let reflection_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("reflection-bind-group-history-b"),
+            layout: reflection_layout,
+            entries: &[
+                texture_entry(0, &albedo),
+                texture_entry(1, &normal),
+                texture_entry(2, &pbr),
+                texture_entry(3, &depth),
+                texture_entry(4, &reflection),
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: frame_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: light_buffer.as_entire_binding(),
+                },
+                texture_entry(8, &rt_history_b),
+                texture_entry(9, &motion),
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: reflection_proxy_buffer.as_entire_binding(),
+                },
+                texture_entry(11, &ssr),
             ],
         });
         let lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1512,7 +1882,62 @@ impl GBuffer {
         let tonemap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tonemap-bind-group"),
             layout: tonemap_layout,
-            entries: &[texture_entry(0, &lighting_hdr), texture_entry(1, &bloom_a)],
+            entries: &[
+                texture_entry(0, &lighting_hdr),
+                texture_entry(1, &bloom_a),
+                texture_entry(2, &volumetric_fog),
+            ],
+        });
+        let depth_copy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("depth-copy-bind-group"),
+            layout: depth_copy_layout,
+            entries: &[texture_entry(0, &depth)],
+        });
+        let hiz_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hiz-bind-group"),
+            layout: hiz_layout,
+            entries: &[texture_entry(0, &depth_copy), texture_entry(1, &hiz)],
+        });
+        let fog_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("volumetric-fog-bind-group"),
+            layout: fog_layout,
+            entries: &[
+                texture_entry(0, &depth_copy),
+                texture_entry(1, &volumetric_fog),
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: frame_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: light_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let smaa_edge_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("smaa-edge-bind-group"),
+            layout: smaa_edge_layout,
+            entries: &[
+                texture_entry(0, &tone_mapped),
+                texture_entry(1, &depth),
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: aa_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let smaa_blend_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("smaa-blend-bind-group"),
+            layout: smaa_blend_layout,
+            entries: &[
+                texture_entry(0, &tone_mapped),
+                texture_entry(1, &smaa_edges),
+                texture_entry(2, &depth),
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: aa_buffer.as_entire_binding(),
+                },
+            ],
         });
         let aa_bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("smaa-t2x-bind-group-history-a"),
@@ -1529,6 +1954,8 @@ impl GBuffer {
                     binding: 4,
                     resource: aa_buffer.as_entire_binding(),
                 },
+                texture_entry(5, &motion),
+                texture_entry(6, &smaa_blend),
             ],
         });
         let aa_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1546,40 +1973,71 @@ impl GBuffer {
                     binding: 4,
                     resource: aa_buffer.as_entire_binding(),
                 },
+                texture_entry(5, &motion),
+                texture_entry(6, &smaa_blend),
             ],
         });
         Self {
             _albedo: albedo_texture,
             _normal: normal_texture,
             _pbr: pbr_texture,
+            _motion: motion_texture,
             _depth: depth_texture,
+            _depth_copy: depth_copy_texture,
+            _hiz: hiz_texture,
+            _ssr: ssr_texture,
             _reflection: reflection_texture,
+            _rt_history_a: rt_history_texture_a,
+            _rt_history_b: rt_history_texture_b,
+            _volumetric_fog: fog_texture,
             _lighting_hdr: lighting_texture,
             _bloom_a: bloom_texture_a,
             _bloom_b: bloom_texture_b,
             _tone_mapped: tone_texture,
+            _smaa_edges: smaa_edge_texture,
+            _smaa_blend: smaa_blend_texture,
             _aa_history_a: history_texture_a,
             _aa_history_b: history_texture_b,
             albedo,
             normal,
             pbr,
+            motion,
             depth,
+            _depth_copy_view: depth_copy,
+            _hiz_view: hiz,
+            _ssr_view: ssr,
             lighting_hdr,
             bloom_a,
             bloom_b,
             tone_mapped,
+            _volumetric_fog_view: volumetric_fog,
+            smaa_edges,
+            smaa_blend,
             aa_history_a,
             aa_history_b,
-            reflection_bind_group,
+            reflection_bind_group_a,
+            reflection_bind_group_b,
             lighting_bind_group,
             bloom_extract_bind_group,
             bloom_blur_a_bind_group,
             bloom_blur_b_bind_group,
             tonemap_bind_group,
+            depth_copy_bind_group,
+            hiz_bind_group,
+            fog_bind_group,
+            ssr_bind_group,
+            smaa_edge_bind_group,
+            smaa_blend_bind_group,
             aa_bind_group_a,
             aa_bind_group_b,
             reflection_width,
             reflection_height,
+            ssr_width,
+            ssr_height,
+            hiz_width,
+            hiz_height,
+            fog_width,
+            fog_height,
         }
     }
 }
@@ -1675,6 +2133,60 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
     (vertices, indices, batches)
 }
 
+fn reflection_proxy_uniform(scene: &RenderScene) -> ReflectionProxyUniform {
+    let mut uniform = ReflectionProxyUniform::zeroed();
+    let mut count = 0_usize;
+    for mesh in &scene.meshes {
+        if count >= MAX_REFLECTION_PROXIES {
+            break;
+        }
+        let Some(material) = scene.materials.get(mesh.material_index) else {
+            continue;
+        };
+        if !mesh.reflection_proxy && !material.flags.emissive {
+            continue;
+        }
+        let mut min = GpuVec3::splat(f32::INFINITY);
+        let mut max = GpuVec3::splat(f32::NEG_INFINITY);
+        for vertex in &mesh.vertices {
+            let position = mesh.transform.mul_vec4(Vec4::new(
+                vertex.position.x,
+                vertex.position.y,
+                vertex.position.z,
+                1.0,
+            ));
+            let position = GpuVec3::new(position.x, position.y, position.z);
+            min = min.min(position);
+            max = max.max(position);
+        }
+        if !min.is_finite() || !max.is_finite() {
+            continue;
+        }
+        let half_extent = ((max - min) * 0.5).max(GpuVec3::splat(0.04));
+        let center = (min + max) * 0.5;
+        min = center - half_extent;
+        max = center + half_extent;
+        let emission = material.emission;
+        let has_emission = material.flags.emissive || emission.r + emission.g + emission.b > 0.0;
+        let radiance = if has_emission {
+            [emission.r, emission.g, emission.b, 1.0]
+        } else {
+            [
+                material.base_color.r * (0.35 + material.specular_intensity),
+                material.base_color.g * (0.35 + material.specular_intensity),
+                material.base_color.b * (0.35 + material.specular_intensity),
+                0.35,
+            ]
+        };
+        uniform.bounds_min[count] = [min.x, min.y, min.z, 0.0];
+        uniform.bounds_max[count] = [max.x, max.y, max.z, 0.0];
+        uniform.radiance[count] = radiance;
+        count += 1;
+    }
+    uniform.count[0] = count as u32;
+    uniform
+}
+
 fn shadow_camera_for_scene(lights: LightUniform, vertices: &[GpuVertex]) -> CameraUniform {
     let surface_to_light = lights.surface_to_directional_light();
     let surface_to_light = if surface_to_light.length_squared() > 0.0 {
@@ -1709,6 +2221,7 @@ fn shadow_camera_for_scene(lights: LightUniform, vertices: &[GpuVertex]) -> Came
             1.0 / SHADOW_MAP_RESOLUTION as f32,
             1.0 / SHADOW_MAP_RESOLUTION as f32,
         ],
+        previous_view_projection: view_projection.to_cols_array_2d(),
     }
 }
 
@@ -1792,6 +2305,7 @@ fn spot_shadow_camera(
             1.0 / LOCAL_SHADOW_MAP_RESOLUTION as f32,
             1.0 / LOCAL_SHADOW_MAP_RESOLUTION as f32,
         ],
+        previous_view_projection: view_projection.to_cols_array_2d(),
     }
 }
 
@@ -2130,9 +2644,103 @@ fn create_geometry_pipeline(
                 Some(color_target(ALBEDO_FORMAT)),
                 Some(color_target(NORMAL_FORMAT)),
                 Some(color_target(PBR_FORMAT)),
+                Some(color_target(MOTION_FORMAT)),
             ],
         }),
         multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_depth_copy_pipeline(
+    device: &wgpu::Device,
+    depth_copy_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/depth_copy.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("depth-copy-pipeline-layout"),
+        bind_group_layouts: &[Some(depth_copy_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("depth-copy-r32f-fullscreen"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(color_target(DEPTH_COPY_FORMAT))],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_hiz_pipeline(
+    device: &wgpu::Device,
+    hiz_layout: &wgpu::BindGroupLayout,
+) -> wgpu::ComputePipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/hiz.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("hiz-pipeline-layout"),
+        bind_group_layouts: &[Some(hiz_layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("hiz-min-max-compute"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("cs_main"),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        cache: None,
+    })
+}
+
+fn create_fog_pipeline(
+    device: &wgpu::Device,
+    fog_layout: &wgpu::BindGroupLayout,
+) -> wgpu::ComputePipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/volumetric_fog.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("volumetric-fog-pipeline-layout"),
+        bind_group_layouts: &[Some(fog_layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("blue-noise-volumetric-fog-compute"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("cs_main"),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        cache: None,
+    })
+}
+
+fn create_ssr_pipeline(
+    device: &wgpu::Device,
+    ssr_layout: &wgpu::BindGroupLayout,
+) -> wgpu::ComputePipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/ssr.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("half-resolution-ssr-pipeline-layout"),
+        bind_group_layouts: &[Some(ssr_layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("half-resolution-ssr-compute"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("cs_main"),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
         cache: None,
     })
 }
@@ -2303,6 +2911,72 @@ fn create_rain_pipeline(
     })
 }
 
+fn create_smaa_edge_pipeline(
+    device: &wgpu::Device,
+    smaa_edge_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/smaa_edges.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("smaa-edge-pipeline-layout"),
+        bind_group_layouts: &[Some(smaa_edge_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("smaa-edge-detect-pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(color_target(SMAA_EDGE_FORMAT))],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_smaa_blend_pipeline(
+    device: &wgpu::Device,
+    smaa_blend_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/smaa_blend.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("smaa-blend-pipeline-layout"),
+        bind_group_layouts: &[Some(smaa_blend_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("smaa-blend-weight-pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(color_target(SMAA_BLEND_FORMAT))],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 fn create_aa_pipeline(
     device: &wgpu::Device,
     aa_layout: &wgpu::BindGroupLayout,
@@ -2364,9 +3038,10 @@ fn reflection_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         entries: &[
             unfiltered_texture_layout_entry(0, wgpu::ShaderStages::COMPUTE),
             unfiltered_texture_layout_entry(1, wgpu::ShaderStages::COMPUTE),
-            depth_layout_entry(2, wgpu::ShaderStages::COMPUTE),
+            unfiltered_texture_layout_entry(2, wgpu::ShaderStages::COMPUTE),
+            depth_layout_entry(3, wgpu::ShaderStages::COMPUTE),
             wgpu::BindGroupLayoutEntry {
-                binding: 3,
+                binding: 4,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::WriteOnly,
@@ -2375,9 +3050,13 @@ fn reflection_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 },
                 count: None,
             },
-            uniform_entry(4, wgpu::ShaderStages::COMPUTE),
             uniform_entry(5, wgpu::ShaderStages::COMPUTE),
             uniform_entry(6, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(7, wgpu::ShaderStages::COMPUTE),
+            unfiltered_texture_layout_entry(8, wgpu::ShaderStages::COMPUTE),
+            unfiltered_texture_layout_entry(9, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(10, wgpu::ShaderStages::COMPUTE),
+            unfiltered_texture_layout_entry(11, wgpu::ShaderStages::COMPUTE),
         ],
     })
 }
@@ -2417,12 +3096,80 @@ fn bloom_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
+fn depth_copy_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("depth-copy-layout"),
+        entries: &[depth_layout_entry(0, wgpu::ShaderStages::FRAGMENT)],
+    })
+}
+
+fn hiz_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("hiz-layout"),
+        entries: &[
+            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::COMPUTE),
+            storage_texture_layout_entry(1, wgpu::ShaderStages::COMPUTE, HIZ_FORMAT),
+        ],
+    })
+}
+
+fn fog_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("volumetric-fog-layout"),
+        entries: &[
+            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::COMPUTE),
+            storage_texture_layout_entry(1, wgpu::ShaderStages::COMPUTE, VOLUMETRIC_FOG_FORMAT),
+            uniform_entry(2, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(3, wgpu::ShaderStages::COMPUTE),
+        ],
+    })
+}
+
+fn ssr_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("half-resolution-ssr-layout"),
+        entries: &[
+            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::COMPUTE),
+            unfiltered_texture_layout_entry(1, wgpu::ShaderStages::COMPUTE),
+            unfiltered_texture_layout_entry(2, wgpu::ShaderStages::COMPUTE),
+            depth_layout_entry(3, wgpu::ShaderStages::COMPUTE),
+            storage_texture_layout_entry(4, wgpu::ShaderStages::COMPUTE, REFLECTION_FORMAT),
+            uniform_entry(5, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(6, wgpu::ShaderStages::COMPUTE),
+        ],
+    })
+}
+
 fn tonemap_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("tonemap-layout"),
         entries: &[
             unfiltered_texture_layout_entry(0, wgpu::ShaderStages::FRAGMENT),
             unfiltered_texture_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+            unfiltered_texture_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
+        ],
+    })
+}
+
+fn smaa_edge_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("smaa-edge-layout"),
+        entries: &[
+            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::FRAGMENT),
+            depth_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+            uniform_entry(2, wgpu::ShaderStages::FRAGMENT),
+        ],
+    })
+}
+
+fn smaa_blend_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("smaa-blend-layout"),
+        entries: &[
+            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::FRAGMENT),
+            unfiltered_texture_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+            depth_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
+            uniform_entry(3, wgpu::ShaderStages::FRAGMENT),
         ],
     })
 }
@@ -2436,6 +3183,8 @@ fn aa_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             depth_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
             uniform_entry(3, wgpu::ShaderStages::FRAGMENT),
             uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
+            unfiltered_texture_layout_entry(5, wgpu::ShaderStages::FRAGMENT),
+            unfiltered_texture_layout_entry(6, wgpu::ShaderStages::FRAGMENT),
         ],
     })
 }
@@ -2503,6 +3252,23 @@ fn unfiltered_texture_layout_entry(
     }
 }
 
+fn storage_texture_layout_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    format: wgpu::TextureFormat,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    }
+}
+
 fn depth_layout_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -2551,6 +3317,55 @@ fn render_texture(
         dimension: wgpu::TextureDimension::D2,
         format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+fn storage_texture(
+    device: &wgpu::Device,
+    label: &str,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+fn reflection_history_texture(
+    device: &wgpu::Device,
+    label: &str,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: REFLECTION_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -2673,6 +3488,18 @@ fn alpha_blend_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
         }),
         write_mask: wgpu::ColorWrites::ALL,
     }
+}
+
+fn load_color_attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachment<'_>> {
+    Some(wgpu::RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: wgpu::Operations {
+            load: wgpu::LoadOp::Load,
+            store: wgpu::StoreOp::Store,
+        },
+    })
 }
 
 fn color_attachment(

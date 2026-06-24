@@ -115,6 +115,59 @@ fn aaa_scene_loads_cc0_pbr_assets() {
 }
 
 #[test]
+fn aaa_prepass_is_limited_to_selected_large_occluders() {
+    let scene = build_aaa_scene("assets/aaa").expect("AAA scene");
+    let prepassed: Vec<_> = scene
+        .meshes
+        .iter()
+        .filter(|mesh| mesh.prepass_eligible)
+        .map(|mesh| mesh.name.as_str())
+        .collect();
+
+    for required in [
+        "left_aged_brick",
+        "right_aged_brick",
+        "alley_end_brick",
+        "left_loading_shutter",
+        "right_loading_shutter",
+        "left_recessed_service_bay",
+        "far_scaffold_shadow",
+    ] {
+        assert!(
+            prepassed.contains(&required),
+            "{required} should be prepassed"
+        );
+    }
+    assert!(prepassed.len() < scene.meshes.len() / 3);
+    for required_proxy in [
+        "rain_darkened_asphalt",
+        "left_aged_brick",
+        "center_dangling_cable_sheet",
+        "far_scaffold_shadow",
+    ] {
+        let mesh = scene
+            .meshes
+            .iter()
+            .find(|mesh| mesh.name == required_proxy)
+            .expect("AAA reflection proxy mesh");
+        assert!(
+            mesh.reflection_proxy,
+            "{required_proxy} should feed reflection proxies"
+        );
+    }
+    assert!(scene
+        .meshes
+        .iter()
+        .filter(|mesh| mesh.name.contains("barrel") || mesh.name.contains("street_lamp"))
+        .all(|mesh| !mesh.prepass_eligible));
+    assert!(scene
+        .meshes
+        .iter()
+        .filter(|mesh| mesh.is_floor_or_ground)
+        .all(|mesh| !mesh.prepass_eligible));
+}
+
+#[test]
 fn aaa_practical_lights_are_shadowed_spots() {
     let scene = build_aaa_scene("assets/aaa").expect("AAA scene");
     for name in ["cyan_practical", "amber_practical"] {
@@ -171,14 +224,24 @@ fn rain_impacts_reflections_and_streaks_share_weather_field() {
     let rain_shader = include_str!("../src/shaders/rain3d.wgsl");
     let lighting_shader = include_str!("../src/shaders/lighting.wgsl");
     let reflection_shader = include_str!("../src/shaders/reflections.wgsl");
+    let ssr_shader = include_str!("../src/shaders/ssr.wgsl");
 
     assert!(rain_shader.contains("const RAIN_GRID_X: u32 = 64u"));
     assert!(lighting_shader.contains("const RAIN_GRID_X: u32 = 64u"));
     assert!(rain_shader.contains("fn rain_wind_direction"));
     assert!(lighting_shader.contains("fn rain_wind_direction"));
     assert!(reflection_shader.contains("fn rain_wind_direction"));
-    assert!(reflection_shader.contains("@group(0) @binding(6) var<uniform> lights: Lights"));
-    assert!(gpu.contains("uniform_entry(6, wgpu::ShaderStages::COMPUTE)"));
+    assert!(reflection_shader.contains("@group(0) @binding(7) var<uniform> lights: Lights"));
+    assert!(ssr_shader.contains("fn trace_screen_space_reflection"));
+    assert!(reflection_shader.contains("fn temporal_reconstruct_reflection"));
+    assert!(reflection_shader.contains("var reflection_history: texture_2d<f32>"));
+    assert!(reflection_shader.contains("var motion_vectors: texture_2d<f32>"));
+    assert!(reflection_shader.contains("var<uniform> reflection_proxies: ReflectionProxies"));
+    assert!(reflection_shader.contains("var half_resolution_ssr: texture_2d<f32>"));
+    assert!(reflection_shader.contains("fn trace_scene_proxy"));
+    assert!(gpu.contains("uniform_entry(7, wgpu::ShaderStages::COMPUTE)"));
+    assert!(gpu.contains("reflection_proxy_uniform(&scene)"));
+    assert!(gpu.contains("uniform_entry(10, wgpu::ShaderStages::COMPUTE)"));
     assert!(lighting_shader.contains("reflection_energy_cap"));
 }
 
@@ -187,6 +250,7 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     let gpu = include_str!("../src/gpu.rs");
     let lighting_shader = include_str!("../src/shaders/lighting.wgsl");
     let reflection_shader = include_str!("../src/shaders/reflections.wgsl");
+    let ssr_shader = include_str!("../src/shaders/ssr.wgsl");
     let bloom_shader = include_str!("../src/shaders/bloom.wgsl");
     let tonemap_shader = include_str!("../src/shaders/tonemap.wgsl");
 
@@ -195,12 +259,58 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     assert!(lighting_shader.contains("PRACTICAL_SPOT_MIN_FILL"));
     assert!(lighting_shader.contains("let fd90 = 0.5 + 2.0 * ldoth * ldoth * roughness"));
     assert!(lighting_shader.contains("specular_occlusion"));
-    assert!(reflection_shader.contains("fn trace_alley_proxy"));
-    assert!(reflection_shader.contains("proxy_emissive_radiance"));
+    assert!(lighting_shader.contains("distance_to_light >= position_radius.w"));
+    assert!(lighting_shader.contains("cone <= 0.001"));
+    assert!(lighting_shader.contains("local_shadow_weight > 0.001"));
+    assert!(ssr_shader.contains("fn surface_direct_radiance"));
+    assert!(!reflection_shader.contains("fn trace_alley_proxy"));
+    assert!(!reflection_shader.contains("proxy_emissive_radiance"));
     assert!(reflection_shader.contains("rough_jitter"));
     assert!(!lighting_shader.contains("bloom_offsets"));
     assert!(gpu.contains("kawase-bloom-extract"));
     assert!(gpu.contains("gt-tonemap-bloom-resolve"));
     assert!(bloom_shader.contains("fs_extract"));
     assert!(tonemap_shader.contains("gt_tonemap"));
+}
+
+#[test]
+fn live_gpu_uses_motion_smaa_stages_and_shadow_cache_flags() {
+    let gpu = include_str!("../src/gpu.rs");
+    let geometry_shader = include_str!("../src/shaders/geometry.wgsl");
+    let aa_shader = include_str!("../src/shaders/aa.wgsl");
+    let depth_copy_shader = include_str!("../src/shaders/depth_copy.wgsl");
+    let tonemap_shader = include_str!("../src/shaders/tonemap.wgsl");
+
+    assert!(gpu.contains("motion-vectors-rg16"));
+    assert!(gpu.contains("smaa-edge-detect"));
+    assert!(gpu.contains("smaa-blend-weights"));
+    assert!(gpu.contains("depth-copy-r32f"));
+    assert!(gpu.contains("depth-copy-r32f-fullscreen"));
+    assert!(gpu.contains("depth_copy_pipeline: wgpu::RenderPipeline"));
+    assert!(!gpu.contains("depth-copy-r32f-compute"));
+    assert!(depth_copy_shader.contains("fn vs_main"));
+    assert!(depth_copy_shader.contains("fn fs_main"));
+    assert!(!depth_copy_shader.contains("@compute"));
+    assert!(gpu.contains("hiz-generation-min-max-discontinuity"));
+    assert!(gpu.contains("blue-noise-volumetric-fog"));
+    assert!(gpu.contains("shadow_cache_ready"));
+    assert!(gpu.contains("local_shadow_cache_ready"));
+    assert!(gpu.contains("load_color_attachment(&self.gbuffer.albedo)"));
+    assert!(geometry_shader.contains("@location(3) motion_vectors"));
+    assert!(aa_shader.contains("@group(0) @binding(5) var motion_vectors"));
+    assert!(aa_shader.contains("@group(0) @binding(6) var smaa_blend"));
+    assert!(tonemap_shader.contains("@group(0) @binding(2) var volumetric_fog"));
+    assert!(gpu.contains("reflection-proxy-uniform"));
+    assert!(gpu.contains("MAX_REFLECTION_PROXIES"));
+}
+
+#[test]
+fn gallery_default_points_at_live_aaa_scene() {
+    let main = include_str!("../src/main.rs");
+    let demo = include_str!("../src/demo.rs");
+    let readme = include_str!("../README.md");
+
+    assert!(main.contains(".unwrap_or(\"assets/aaa\")"));
+    assert!(demo.contains("build_aaa_scene(asset_path)"));
+    assert!(readme.contains("same `assets/aaa` industrial alley scene used by `--live`"));
 }

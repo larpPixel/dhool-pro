@@ -21,12 +21,14 @@ DHOOL_GPU=AMD cargo run --release -- --live
 DHOOL_GPU=NVIDIA cargo run --release -- --live
 ```
 
-The GPU frame executes a cached 4096px directional shadow map with normal-biased
-5x5 PCF, a vertex-only partial depth prepass, hardware depth-tested PBR G-buffer
-rasterization, a 70%-resolution WGSL compute reflection pass, fullscreen deferred
-lighting with screen-space occlusion, procedural world-space 3D rain, procedural
-wet surfaces/puddles, GT tone mapping, and a final SMAA T2x-style edge/persistence resolve. Materials use
-mipmapped base-color, tangent-space normal, and packed AO/roughness/metallic maps.
+The GPU frame executes cached directional/local shadow maps, a vertex-only
+partial depth prepass, hardware depth-tested PBR+motion G-buffer rasterization,
+a fullscreen R32 depth copy, half-resolution Hi-Z/fog/SSR compute passes,
+temporal reflections over simplified proxy geometry, light-volume guarded HDR
+deferred lighting with screen-space occlusion, procedural world-space 3D rain,
+Kawase bloom, GT tone mapping, and a final SMAA T2x-style edge/persistence
+resolve. Materials use mipmapped base-color, tangent-space normal, and packed
+AO/roughness/metallic maps.
 
 ![Rainy industrial live GPU scene](demo-output/aaa-live.png)
 
@@ -50,13 +52,14 @@ cargo run --release -- --gallery demo-output
 python3 -m http.server 8080 -d demo-output
 ```
 
-Open `http://localhost:8080`. The gallery exports the beauty frame and all 16
-production diagnostics as PNG files, plus `timings.txt` with per-pass CPU
-measurements and warnings.
+Open `http://localhost:8080`. By default the gallery exports diagnostics for
+the same `assets/aaa` industrial alley scene used by `--live`: the beauty frame,
+all 16 production debug views, and `timings.txt` with per-pass CPU measurements
+and warnings.
 
 Asset origins, licenses, and refresh commands are recorded in
-[`ASSET_SOURCES.md`](ASSET_SOURCES.md). The deterministic CPU gallery still accepts
-another core glTF 2.0 asset:
+[`ASSET_SOURCES.md`](ASSET_SOURCES.md). For the deterministic CPU glTF showcase,
+pass another core glTF 2.0 asset:
 
 ```sh
 cargo run --release -- --gallery demo-output --asset path/to/model.gltf
