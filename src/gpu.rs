@@ -31,9 +31,10 @@ const VOLUMETRIC_FOG_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Fl
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const CAMERA_MOVE_SPEED: f32 = 4.0;
 const CAMERA_LOOK_SPEED: f32 = 1.55;
+const GENERATED_RAIN_STREAK_DETAIL: &str = "assets/aaa/rain/generated_streak_detail.png";
 const RAIN_DROP_COUNT: u32 = 4_096;
 const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
-const MAX_GPU_POINT_LIGHTS: usize = 4;
+const MAX_GPU_POINT_LIGHTS: usize = 6;
 const MAX_REFLECTION_PROXIES: usize = 24;
 const SHADOW_MAP_RESOLUTION: u32 = 4_096;
 const LOCAL_SHADOW_MAP_RESOLUTION: u32 = 1_024;
@@ -41,7 +42,6 @@ const BLOOM_SCALE: u32 = 4;
 const HIZ_SCALE: u32 = 2;
 const FOG_SCALE: u32 = 2;
 const SSR_SCALE: u32 = 2;
-const EMISSIVE_SCALE: f32 = 12.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveOptions {
@@ -493,11 +493,14 @@ struct GpuMaterial {
 }
 
 struct RainTextures {
+    _streak_texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
 }
 
 struct RainPassResources<'a> {
     camera_buffer: &'a wgpu::Buffer,
+    streak_view: &'a wgpu::TextureView,
+    streak_sampler: &'a wgpu::Sampler,
     light_buffer: &'a wgpu::Buffer,
     shadow_view: &'a wgpu::TextureView,
     shadow_sampler: &'a wgpu::Sampler,
@@ -808,14 +811,37 @@ impl GpuRenderer {
             .iter()
             .map(|material| create_material(&device, &queue, &material_layout, material))
             .collect();
+        let rain_streak_path = PathBuf::from(GENERATED_RAIN_STREAK_DETAIL);
+        let rain_streak_detail = TextureImage::from_path(&rain_streak_path).map_err(|message| {
+            LiveError::Scene(format!("{}: {message}", rain_streak_path.display()))
+        })?;
+        let (rain_streak_texture, rain_streak_view) = upload_material_texture(
+            &device,
+            &queue,
+            "rain-streak-detail",
+            &rain_streak_detail,
+            false,
+        );
+        let rain_streak_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("rain-streak-detail-linear-repeat"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
         let rain_resources = RainPassResources {
             camera_buffer: &camera_buffer,
+            streak_view: &rain_streak_view,
+            streak_sampler: &rain_streak_sampler,
             light_buffer: &light_buffer,
             shadow_view: &shadow_view,
             shadow_sampler: &shadow_sampler,
             shadow_camera_buffer: &shadow_camera_buffer,
         };
-        let rain = create_rain_resources(&device, &rain_layout, rain_resources);
+        let rain =
+            create_rain_resources(&device, &rain_layout, rain_resources, rain_streak_texture);
 
         let depth_pipeline = create_depth_pipeline(&device, &camera_layout);
         let shadow_pipeline = create_shadow_pipeline(&device, &camera_layout);
@@ -2320,6 +2346,7 @@ fn create_material(
         .r
         .max(material.emission.g)
         .max(material.emission.b);
+    let material_flag = if material.flags.glass { 1.0 } else { 0.0 };
     let uniform = MaterialUniform {
         base_color: [
             material.base_color.r,
@@ -2331,13 +2358,13 @@ fn create_material(
             material.roughness,
             material.metallic,
             material.cavity,
-            emission_strength,
+            material_flag,
         ],
         emission: [
             material.emission.r,
             material.emission.g,
             material.emission.b,
-            EMISSIVE_SCALE,
+            emission_strength,
         ],
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -2406,6 +2433,7 @@ fn create_rain_resources(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     resources: RainPassResources<'_>,
+    streak_texture: wgpu::Texture,
 ) -> RainTextures {
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("world-space-rain-bind-group"),
@@ -2414,6 +2442,11 @@ fn create_rain_resources(
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: resources.camera_buffer.as_entire_binding(),
+            },
+            texture_entry(1, resources.streak_view),
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(resources.streak_sampler),
             },
             texture_entry(3, resources.shadow_view),
             wgpu::BindGroupEntry {
@@ -2430,7 +2463,10 @@ fn create_rain_resources(
             },
         ],
     });
-    RainTextures { bind_group }
+    RainTextures {
+        _streak_texture: streak_texture,
+        bind_group,
+    }
 }
 
 fn solid_texture(color: crate::math::Color) -> TextureImage {
@@ -2641,7 +2677,7 @@ fn create_geometry_pipeline(
             entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[
-                Some(color_target(ALBEDO_FORMAT)),
+                Some(translucent_albedo_target(ALBEDO_FORMAT)),
                 Some(color_target(NORMAL_FORMAT)),
                 Some(color_target(PBR_FORMAT)),
                 Some(color_target(MOTION_FORMAT)),
@@ -3194,6 +3230,13 @@ fn rain_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         label: Some("world-space-rain-layout"),
         entries: &[
             uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            sampled_texture_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
             depth_layout_entry(3, wgpu::ShaderStages::FRAGMENT),
             wgpu::BindGroupLayoutEntry {
                 binding: 4,
@@ -3467,6 +3510,25 @@ fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
         format,
         blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
+fn translucent_albedo_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+        }),
         write_mask: wgpu::ColorWrites::ALL,
     }
 }

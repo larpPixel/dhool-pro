@@ -11,13 +11,15 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
-    local_position_radius: array<vec4<f32>, 4>,
-    local_color_intensity: array<vec4<f32>, 4>,
-    local_direction_outer: array<vec4<f32>, 4>,
-    local_inner_shadow: array<vec4<f32>, 4>,
+    local_position_radius: array<vec4<f32>, 6>,
+    local_color_intensity: array<vec4<f32>, 6>,
+    local_direction_outer: array<vec4<f32>, 6>,
+    local_inner_shadow: array<vec4<f32>, 6>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
+@group(0) @binding(1) var rain_streak_detail: texture_2d<f32>;
+@group(0) @binding(2) var rain_streak_sampler: sampler;
 @group(0) @binding(3) var shadow_map: texture_depth_2d;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
 @group(0) @binding(5) var<uniform> light_camera: Camera;
@@ -128,17 +130,22 @@ fn shadow_visibility(world_position: vec3<f32>) -> f32 {
     }
     let texel = 1.0 / vec2<f32>(textureDimensions(shadow_map));
     var visibility = 0.0;
-    for (var y = -1; y <= 1; y += 1) {
-        for (var x = -1; x <= 1; x += 1) {
+    var total_weight = 0.0;
+    for (var y = -2; y <= 2; y += 1) {
+        for (var x = -2; x <= 2; x += 1) {
+            let offset = vec2<f32>(f32(x), f32(y));
+            let weight = 1.0 / (1.0 + dot(offset, offset) * 0.30);
             visibility += textureSampleCompare(
                 shadow_map,
                 shadow_sampler,
-                uv + vec2<f32>(f32(x), f32(y)) * texel * 1.25,
+                uv + offset * texel * 5.0,
                 light_ndc.z - 0.0018
-            );
+            ) * weight;
+            total_weight += weight;
         }
     }
-    return visibility / 9.0;
+    let filtered_visibility = visibility / max(total_weight, 0.0001);
+    return mix(filtered_visibility, 1.0, 0.04);
 }
 
 fn spot_cone_attenuation(light_index: u32, light_to_surface: vec3<f32>) -> f32 {
@@ -148,8 +155,11 @@ fn spot_cone_attenuation(light_index: u32, light_to_surface: vec3<f32>) -> f32 {
     }
     let direction_outer = lights.local_direction_outer[light_index];
     let spot_direction = safe_normalize(direction_outer.xyz);
-    let cone = clamp((dot(light_to_surface, spot_direction) - direction_outer.w) / max(flags.x - direction_outer.w, 0.0001), 0.0, 1.0);
-    return cone * cone * (3.0 - 2.0 * cone);
+    let alignment = dot(light_to_surface, spot_direction);
+    let cone = clamp((alignment - direction_outer.w) / max(flags.x - direction_outer.w, 0.0001), 0.0, 1.0);
+    let smooth_core = cone * cone * (3.0 - 2.0 * cone);
+    let outer_halo = smoothstep(direction_outer.w - 0.20, direction_outer.w + 0.015, alignment) * 0.24;
+    return max(smooth_core, outer_halo * (1.0 - smooth_core * 0.45));
 }
 
 fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
@@ -157,7 +167,8 @@ fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
     if flags.w < 0.5 {
         return 1.0;
     }
-    return mix(0.42, 1.0, clamp(cone, 0.0, 1.0));
+    let spot_presence = smoothstep(0.015, 0.16, cone);
+    return mix(0.26, 1.0, clamp(cone, 0.0, 1.0)) * spot_presence;
 }
 
 fn rain_light_response(world_position: vec3<f32>, view_direction: vec3<f32>, rain_axis: vec3<f32>) -> vec3<f32> {
@@ -170,7 +181,7 @@ fn rain_light_response(world_position: vec3<f32>, view_direction: vec3<f32>, rai
             * moon_side_scatter
             * shadow_visibility(world_position);
     }
-    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 4.0));
+    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
     for (var light_index = 0u; light_index < local_count; light_index += 1u) {
         let position_radius = lights.local_position_radius[light_index];
         let to_light = position_radius.xyz - world_position;
@@ -198,6 +209,19 @@ fn procedural_streak_alpha(uv: vec2<f32>, seed: f32) -> f32 {
     let filament = 0.74 + hash11(seed + floor(axis_t * 17.0)) * 0.26;
     let broken = mix(0.66, 1.0, smoothstep(0.08, 0.92, hash11(seed + floor(axis_t * 7.0) * 19.1)));
     return head * tail * filament * broken;
+}
+
+fn generated_streak_detail(uv: vec2<f32>, seed: f32) -> vec3<f32> {
+    let vertical_scale = 0.58 + hash11(seed + 17.0) * 0.62;
+    let atlas_uv = vec2<f32>(
+        uv.x,
+        fract(uv.y * vertical_scale + hash11(seed + 23.0))
+    );
+    let sample = textureSample(rain_streak_detail, rain_streak_sampler, atlas_uv).rgb;
+    let value = max(sample.r, max(sample.g, sample.b));
+    let filament = smoothstep(0.015, 0.42, value);
+    let bead = smoothstep(0.50, 0.96, value);
+    return vec3<f32>(filament, bead, value);
 }
 
 @vertex
@@ -238,7 +262,10 @@ fn vs_main(
 
     var output: VertexOutput;
     output.position = camera.view_projection * vec4<f32>(world_position, 1.0);
-    output.uv = vec2<f32>(fract((f32(instance_index % 11u) + local.x * 0.5 + 0.5) * 0.37), local.z * 0.5 + 0.5);
+    output.uv = vec2<f32>(
+        fract(hash11(seed + 409.9) + local.x * 0.018 + local.y * 0.014),
+        local.z * 0.5 + 0.5
+    );
     output.seed = random.y + layer * 1.37;
     output.alpha = (0.040 + random.z * 0.135 + layer * 0.018)
         * (0.46 + hash11(seed + 201.3) * 0.92)
@@ -254,6 +281,7 @@ fn vs_main(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let streak_alpha = procedural_streak_alpha(input.uv, input.seed);
+    let streak_detail = generated_streak_detail(input.uv, input.seed);
     let view_direction = safe_normalize(camera.position_time.xyz - input.world_position);
     let surface_normal = safe_normalize(input.surface_normal);
     let radiance = rain_light_response(input.world_position, view_direction, input.rain_axis);
@@ -262,23 +290,25 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         * lights.directional_color_intensity.w;
     let edge_transmission = 1.0 - abs(dot(surface_normal, view_direction));
     let light_mask = clamp(
-        smoothstep(0.025, 0.50, luminance(radiance)) * 0.46 + smoothstep(0.02, 0.52, normal_glint) * 0.34,
-        0.0,
-        0.72
+        0.08 + smoothstep(0.025, 0.50, luminance(radiance)) * 0.52 + smoothstep(0.02, 0.52, normal_glint) * 0.42,
+        0.06,
+        0.92
     );
     let depth_presence = 1.0 - smoothstep(18.0, 31.0, input.camera_distance);
     let near_presence = 1.0 - smoothstep(2.2, 8.5, input.camera_distance);
     let depth_breakup = 0.48 + hash11(floor(input.camera_distance * 0.72) + input.seed * 5.1) * 0.70;
     let segment_breakup = mix(0.34, 1.12, hash11(input.seed * 31.7 + floor(input.uv.y * 11.0) * 3.9));
+    let generated_alpha = 0.36 + streak_detail.x * 0.88 + streak_detail.y * 0.42;
     let alpha = clamp(
-        streak_alpha * segment_breakup * input.alpha * input.boundary_fade * depth_presence * depth_breakup * (0.34 + near_presence * 0.58) * (0.46 + edge_transmission * 0.54) * light_mask,
+        streak_alpha * segment_breakup * generated_alpha * input.alpha * input.boundary_fade * depth_presence * depth_breakup * (0.40 + near_presence * 0.64) * (0.46 + edge_transmission * 0.54) * light_mask,
         0.0,
-        0.30
+        0.38
     );
     let water_tint = vec3<f32>(0.13, 0.17, 0.22);
     let depth_haze = smoothstep(8.0, 26.0, input.camera_distance);
-    let lit_water = mix(water_tint, radiance * 0.34, vec3<f32>(0.62))
-        * (0.50 + edge_transmission * 0.34 + streak_alpha * 0.16 + near_presence * 0.12);
+    let bead_glint = streak_detail.y * (0.42 + near_presence * 0.58) * (0.48 + edge_transmission * 0.52);
+    let lit_water = mix(water_tint, radiance * (0.34 + bead_glint * 0.26), vec3<f32>(0.62))
+        * (0.50 + edge_transmission * 0.34 + streak_alpha * 0.16 + near_presence * 0.12 + bead_glint * 0.28);
     let hdr_color = mix(lit_water, lights.sky.rgb * 0.16, depth_haze * 0.28);
     return vec4<f32>(max(hdr_color, vec3<f32>(0.0)), alpha);
 }

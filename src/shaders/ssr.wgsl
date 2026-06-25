@@ -11,10 +11,10 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
-    local_position_radius: array<vec4<f32>, 4>,
-    local_color_intensity: array<vec4<f32>, 4>,
-    local_direction_outer: array<vec4<f32>, 4>,
-    local_inner_shadow: array<vec4<f32>, 4>,
+    local_position_radius: array<vec4<f32>, 6>,
+    local_color_intensity: array<vec4<f32>, 6>,
+    local_direction_outer: array<vec4<f32>, 6>,
+    local_inner_shadow: array<vec4<f32>, 6>,
 };
 
 struct SsrHit {
@@ -49,8 +49,11 @@ fn spot_cone_attenuation(light_index: u32, light_to_surface: vec3<f32>) -> f32 {
     }
     let direction_outer = lights.local_direction_outer[light_index];
     let spot_direction = safe_normalize(direction_outer.xyz);
-    let cone = clamp((dot(light_to_surface, spot_direction) - direction_outer.w) / max(flags.x - direction_outer.w, 0.0001), 0.0, 1.0);
-    return cone * cone * (3.0 - 2.0 * cone);
+    let alignment = dot(light_to_surface, spot_direction);
+    let cone = clamp((alignment - direction_outer.w) / max(flags.x - direction_outer.w, 0.0001), 0.0, 1.0);
+    let smooth_core = cone * cone * (3.0 - 2.0 * cone);
+    let outer_halo = smoothstep(direction_outer.w - 0.20, direction_outer.w + 0.015, alignment) * 0.24;
+    return max(smooth_core, outer_halo * (1.0 - smooth_core * 0.45));
 }
 
 fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
@@ -58,7 +61,8 @@ fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
     if flags.w < 0.5 {
         return 1.0;
     }
-    return mix(0.42, 1.0, clamp(cone, 0.0, 1.0));
+    let spot_presence = smoothstep(0.015, 0.16, cone);
+    return mix(0.26, 1.0, clamp(cone, 0.0, 1.0)) * spot_presence;
 }
 
 fn surface_direct_radiance(position: vec3<f32>, normal: vec3<f32>, base: vec3<f32>) -> vec3<f32> {
@@ -73,7 +77,7 @@ fn surface_direct_radiance(position: vec3<f32>, normal: vec3<f32>, base: vec3<f3
             * 0.55;
     }
 
-    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 4.0));
+    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
     for (var light_index = 0u; light_index < local_count; light_index += 1u) {
         let position_radius = lights.local_position_radius[light_index];
         let to_light = position_radius.xyz - position;

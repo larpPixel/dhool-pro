@@ -11,14 +11,14 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
-    local_position_radius: array<vec4<f32>, 4>,
-    local_color_intensity: array<vec4<f32>, 4>,
-    local_direction_outer: array<vec4<f32>, 4>,
-    local_inner_shadow: array<vec4<f32>, 4>,
+    local_position_radius: array<vec4<f32>, 6>,
+    local_color_intensity: array<vec4<f32>, 6>,
+    local_direction_outer: array<vec4<f32>, 6>,
+    local_inner_shadow: array<vec4<f32>, 6>,
 };
 
 struct LocalShadowCameras {
-    view_projection: array<mat4x4<f32>, 4>,
+    view_projection: array<mat4x4<f32>, 6>,
 };
 
 @group(0) @binding(0) var albedo: texture_2d<f32>;
@@ -38,8 +38,8 @@ const RAIN_GRID_Z: u32 = 64u;
 const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-7.2, 0.14, -21.0);
 const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(14.4, 9.6, 29.5);
 const EMISSIVE_SCALE: f32 = 12.0;
-const PRACTICAL_SPOT_MIN_FILL: f32 = 0.42;
-const PRACTICAL_SPOT_MIN_SHADOW: f32 = 0.35;
+const PRACTICAL_SPOT_MIN_FILL: f32 = 0.26;
+const PRACTICAL_SPOT_MIN_SHADOW: f32 = 0.24;
 
 
 struct VertexOutput {
@@ -143,6 +143,14 @@ fn rain_cell_seed(cell: vec2<f32>) -> f32 {
     return hash21(cell + vec2<f32>(23.1, 91.7));
 }
 
+fn transparent_underlay(world_position: vec3<f32>) -> vec3<f32> {
+    let asphalt = vec3<f32>(0.018, 0.022, 0.025);
+    let concrete = vec3<f32>(0.060, 0.058, 0.052);
+    let walkway = smoothstep(3.45, 4.75, abs(world_position.x));
+    let base = mix(asphalt, concrete, walkway);
+    let stain = layered_noise(world_position.xz * 0.55 + vec2<f32>(17.3, 4.1));
+    return base * mix(0.72, 1.08, stain);
+}
 
 fn reconstruct_world_position(uv: vec2<f32>, scene_depth: f32) -> vec3<f32> {
     let clip_position = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, scene_depth, 1.0);
@@ -257,6 +265,83 @@ fn screen_space_occlusion(pixel: vec2<u32>, world_position: vec3<f32>, normal: v
     return clamp(1.0 - occlusion * 0.28, 0.14, 1.0);
 }
 
+fn screen_space_contact_shadow(
+    pixel: vec2<u32>,
+    world_position: vec3<f32>,
+    normal: vec3<f32>,
+    light_direction: vec3<f32>,
+    max_distance: f32,
+    strength: f32
+) -> f32 {
+    let ndotl = dot(normal, light_direction);
+    if ndotl <= 0.025 || max_distance <= 0.05 {
+        return 1.0;
+    }
+    let receiver_contact_gate = smoothstep(0.20, 0.78, normal.y);
+    if receiver_contact_gate <= 0.015 {
+        return 1.0;
+    }
+    let size = textureDimensions(depth);
+    let origin = world_position + normal * 0.045 + light_direction * 0.035;
+    let jitter = hash21(vec2<f32>(pixel) + world_position.xz * 13.7) * 0.45;
+    var accumulated_occlusion = 0.0;
+    var strongest_occlusion = 0.0;
+    var total_weight = 0.0;
+    for (var step_index = 0u; step_index < 8u; step_index += 1u) {
+        let step_phase = (f32(step_index) + 0.62 + jitter) / 8.45;
+        let ray_distance = mix(0.055, max_distance, step_phase * step_phase);
+        let sample_world = origin + light_direction * ray_distance;
+        let sample_clip = camera.view_projection * vec4<f32>(sample_world, 1.0);
+        if sample_clip.w <= 0.0001 {
+            continue;
+        }
+        let sample_ndc = sample_clip.xyz / sample_clip.w;
+        if sample_ndc.z <= 0.0 || sample_ndc.z >= 1.0 {
+            continue;
+        }
+        let sample_uv = sample_ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
+        if any(sample_uv < vec2<f32>(0.0)) || any(sample_uv > vec2<f32>(1.0)) {
+            continue;
+        }
+        let sample_pixel_i = clamp(
+            vec2<i32>(sample_uv * vec2<f32>(size)),
+            vec2<i32>(0),
+            vec2<i32>(size) - vec2<i32>(1)
+        );
+        let scene_depth = textureLoad(depth, sample_pixel_i, 0);
+        if scene_depth >= 0.99999 {
+            continue;
+        }
+        let depth_delta = sample_ndc.z - scene_depth;
+        if depth_delta <= 0.00014 {
+            continue;
+        }
+        let scene_uv = (vec2<f32>(sample_pixel_i) + 0.5) / vec2<f32>(size);
+        let occluder_world = reconstruct_world_position(scene_uv, scene_depth);
+        let to_occluder = occluder_world - world_position;
+        let along_ray = dot(to_occluder, light_direction);
+        if along_ray <= 0.035 || along_ray >= max_distance + 0.12 {
+            continue;
+        }
+        let closest_ray_point = world_position + light_direction * along_ray;
+        let lateral_distance = length(occluder_world - closest_ray_point);
+        let thickness = 0.045 + along_ray * 0.085 + (1.0 - ndotl) * 0.035;
+        let contact = 1.0 - smoothstep(thickness, thickness * 3.15, lateral_distance);
+        let depth_weight = smoothstep(0.00014, 0.0024, depth_delta);
+        let distance_weight = 1.0 - smoothstep(max_distance * 0.58, max_distance, along_ray);
+        let receiver_side = smoothstep(-0.015, 0.055, dot(to_occluder, normal));
+        let sample_occlusion = contact * depth_weight * distance_weight * receiver_side;
+        let sample_weight = 1.0 - step_phase * 0.42;
+        accumulated_occlusion += sample_occlusion * sample_weight;
+        strongest_occlusion = max(strongest_occlusion, sample_occlusion);
+        total_weight += sample_weight;
+    }
+    let averaged_occlusion = accumulated_occlusion / max(total_weight, 0.0001);
+    let softened_occlusion = smoothstep(0.05, 0.72, mix(averaged_occlusion, strongest_occlusion, 0.42));
+    let contact_visibility = clamp(1.0 - softened_occlusion * strength, 0.55, 1.0);
+    return mix(1.0, contact_visibility, receiver_contact_gate);
+}
+
 fn shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_direction: vec3<f32>) -> f32 {
     let light_clip = light_camera.view_projection * vec4<f32>(world_position + normal * 0.018, 1.0);
     let light_ndc = light_clip.xyz / max(light_clip.w, 0.00001);
@@ -267,18 +352,24 @@ fn shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_directi
     let texel = 1.0 / vec2<f32>(textureDimensions(shadow_map));
     let ndotl = max(dot(normal, light_direction), 0.0);
     let bias = max(0.00055, (1.0 - ndotl) * 0.0024);
+    let filter_radius = 7.25 + (1.0 - ndotl) * 5.25;
     var visibility = 0.0;
-    for (var y = -2; y <= 2; y += 1) {
-        for (var x = -2; x <= 2; x += 1) {
+    var total_weight = 0.0;
+    for (var y = -3; y <= 3; y += 1) {
+        for (var x = -3; x <= 3; x += 1) {
+            let offset = vec2<f32>(f32(x), f32(y));
+            let weight = 1.0 / (1.0 + dot(offset, offset) * 0.24);
             visibility += textureSampleCompare(
                 shadow_map,
                 shadow_sampler,
-                uv + vec2<f32>(f32(x), f32(y)) * texel * 1.18,
+                uv + offset * texel * filter_radius,
                 light_ndc.z - bias
-            );
+            ) * weight;
+            total_weight += weight;
         }
     }
-    return visibility / 25.0;
+    let filtered_visibility = visibility / max(total_weight, 0.0001);
+    return mix(filtered_visibility, 1.0, 0.035);
 }
 
 fn spot_cone_attenuation(light_index: u32, light_to_surface: vec3<f32>) -> f32 {
@@ -290,8 +381,11 @@ fn spot_cone_attenuation(light_index: u32, light_to_surface: vec3<f32>) -> f32 {
     let spot_direction = safe_normalize(direction_outer.xyz);
     let inner = flags.x;
     let outer = direction_outer.w;
-    let cone = clamp((dot(light_to_surface, spot_direction) - outer) / max(inner - outer, 0.0001), 0.0, 1.0);
-    return cone * cone * (3.0 - 2.0 * cone);
+    let alignment = dot(light_to_surface, spot_direction);
+    let core = clamp((alignment - outer) / max(inner - outer, 0.0001), 0.0, 1.0);
+    let smooth_core = core * core * (3.0 - 2.0 * core);
+    let outer_halo = smoothstep(outer - 0.20, outer + 0.015, alignment) * 0.24;
+    return max(smooth_core, outer_halo * (1.0 - smooth_core * 0.45));
 }
 
 fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
@@ -299,7 +393,8 @@ fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
     if flags.w < 0.5 {
         return 1.0;
     }
-    return mix(PRACTICAL_SPOT_MIN_FILL, 1.0, clamp(cone, 0.0, 1.0));
+    let spot_presence = smoothstep(0.015, 0.16, cone);
+    return mix(PRACTICAL_SPOT_MIN_FILL, 1.0, clamp(cone, 0.0, 1.0)) * spot_presence;
 }
 
 fn practical_spot_shadow_weight(light_index: u32, cone: f32) -> f32 {
@@ -307,7 +402,8 @@ fn practical_spot_shadow_weight(light_index: u32, cone: f32) -> f32 {
     if flags.w < 0.5 {
         return 1.0;
     }
-    return mix(PRACTICAL_SPOT_MIN_SHADOW, 1.0, clamp(cone, 0.0, 1.0));
+    let spot_presence = smoothstep(0.015, 0.18, cone);
+    return mix(PRACTICAL_SPOT_MIN_SHADOW, 1.0, clamp(cone, 0.0, 1.0)) * spot_presence;
 }
 
 fn local_shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_index: u32) -> f32 {
@@ -328,18 +424,23 @@ fn local_shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_i
     let texel = 1.0 / vec2<f32>(textureDimensions(local_shadow_maps));
     let layer = i32(light_index);
     var visibility = 0.0;
-    for (var y = -1; y <= 1; y += 1) {
-        for (var x = -1; x <= 1; x += 1) {
+    var total_weight = 0.0;
+    for (var y = -2; y <= 2; y += 1) {
+        for (var x = -2; x <= 2; x += 1) {
+            let offset = vec2<f32>(f32(x), f32(y));
+            let weight = 1.0 / (1.0 + dot(offset, offset) * 0.32);
             visibility += textureSampleCompare(
                 local_shadow_maps,
                 shadow_sampler,
-                uv + vec2<f32>(f32(x), f32(y)) * texel * 1.35,
+                uv + offset * texel * 5.25,
                 layer,
                 light_ndc.z - 0.0015
-            );
+            ) * weight;
+            total_weight += weight;
         }
     }
-    return visibility / 9.0;
+    let filtered_visibility = visibility / max(total_weight, 0.0001);
+    return mix(filtered_visibility, 1.0, 0.045);
 }
 
 fn shade_light(
@@ -402,18 +503,22 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let surface_raw = textureLoad(pbr, vec2<i32>(pixel), 0);
-    let normal = normalize(textureLoad(normals, vec2<i32>(pixel), 0).xyz);
+    let normal_flags = textureLoad(normals, vec2<i32>(pixel), 0);
+    let normal = normalize(normal_flags.xyz);
+    let glass_mask = smoothstep(0.85, 1.0, normal_flags.w);
     let world_position = reconstruct_world_position(input.uv, scene_depth);
     let wetness = rain_wetness(world_position, normal, surface_raw, camera.position_time.w);
     let impact = procedural_rain_impacts(world_position, normal, surface_raw, camera.position_time.w);
-    let water_coverage = clamp(wetness + impact * 0.62, 0.0, 1.0);
+    let water_coverage = clamp(max(wetness, glass_mask * 0.94) + impact * 0.62, 0.0, 1.0);
     let effective_surface = vec4<f32>(
-        mix(surface_raw.x, 0.032, water_coverage * 0.84),
+        mix(surface_raw.x, 0.022, water_coverage * 0.88),
         surface_raw.y,
         surface_raw.z,
         surface_raw.a
     );
-    let base_raw = textureLoad(albedo, vec2<i32>(pixel), 0).rgb;
+    let albedo_sample = textureLoad(albedo, vec2<i32>(pixel), 0);
+    let opacity = mix(1.0, clamp(albedo_sample.a, 0.04, 1.0), glass_mask);
+    let base_raw = albedo_sample.rgb;
     let base = mix(base_raw, base_raw * 0.58, wetness * (1.0 - surface_raw.y) * 0.46);
     let reflected_sample = sample_reflection_history(input.uv);
     let reflected = reflected_sample.rgb;
@@ -424,15 +529,26 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let light_direction = safe_normalize(lights.directional_direction_count.xyz);
     let view_direction = safe_normalize(camera.position_time.xyz - world_position);
     let ssao = screen_space_occlusion(pixel, world_position, normal);
+    let contact_visibility = mix(ssao, 1.0, 0.62);
     let ambient = lights.ambient.rgb * (0.48 + max(normal.y, 0.0) * 0.52);
     let sun_shadow = shadow_visibility(world_position, normal, light_direction);
-    var hdr = base * vec3<f32>(1.0 - surface_raw.y) * ambient * ssao * effective_surface.z * (1.0 - emissive_mask * 0.85);
+    let transparent_diffuse_weight = mix(1.0, 0.24 + opacity * 0.18, glass_mask);
+    var hdr = base
+        * vec3<f32>(1.0 - surface_raw.y)
+        * ambient
+        * ssao
+        * effective_surface.z
+        * transparent_diffuse_weight
+        * (1.0 - emissive_mask * 0.85);
     if lights.directional_color_intensity.w > 0.0 && length(light_direction) > 0.0 {
+        let directional_contact =
+            screen_space_contact_shadow(pixel, world_position, normal, light_direction, 1.35, 0.40);
         let directional_radiance =
-            lights.directional_color_intensity.rgb * lights.directional_color_intensity.w * sun_shadow;
-        hdr += shade_light(base, normal, view_direction, effective_surface, wetness, light_direction, directional_radiance);
+            lights.directional_color_intensity.rgb * lights.directional_color_intensity.w * sun_shadow * directional_contact;
+        hdr += shade_light(base, normal, view_direction, effective_surface, wetness, light_direction, directional_radiance)
+            * contact_visibility;
     }
-    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 4.0));
+    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
     for (var light_index = 0u; light_index < local_count; light_index += 1u) {
         let position_radius = lights.local_position_radius[light_index];
         let to_light = position_radius.xyz - world_position;
@@ -448,7 +564,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             continue;
         }
         let cone = spot_cone_attenuation(light_index, light_to_surface);
-        if lights.local_inner_shadow[light_index].w > 0.5 && cone <= 0.001 {
+        if lights.local_inner_shadow[light_index].w > 0.5 && cone <= 0.0001 {
             continue;
         }
         let spot = practical_spot_fill(light_index, cone);
@@ -461,20 +577,61 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 local_shadow_weight
             );
         }
-        let local_radiance = color_intensity.rgb * color_intensity.w * attenuation * spot * local_shadow;
-        hdr += shade_light(base, normal, view_direction, effective_surface, wetness, local_direction, local_radiance);
+        let shadowed_region_lift = 1.0 + (1.0 - sun_shadow) * 0.34;
+        let local_contact = screen_space_contact_shadow(
+            pixel,
+            world_position,
+            normal,
+            local_direction,
+            clamp(distance_to_light * 0.42, 0.42, 1.45),
+            0.34
+        );
+        let local_radiance =
+            color_intensity.rgb * color_intensity.w * attenuation * spot * local_shadow * local_contact * shadowed_region_lift;
+        hdr += shade_light(base, normal, view_direction, effective_surface, wetness, local_direction, local_radiance)
+            * contact_visibility;
+        let opposite_side_fill = 1.0 + (1.0 - max(dot(normal, local_direction), 0.0)) * 0.50;
+        let local_bounce = base
+            * color_intensity.rgb
+            * color_intensity.w
+            * attenuation
+            * spot
+            * (0.076 + wetness * 0.062)
+            * (1.0 - surface_raw.y)
+            * (1.0 - emissive_mask)
+            * ssao
+            * shadowed_region_lift
+            * opposite_side_fill;
+        hdr += local_bounce;
+        let local_rim = color_intensity.rgb
+            * color_intensity.w
+            * attenuation
+            * spot
+            * pow(1.0 - max(dot(normal, view_direction), 0.0), 2.0)
+            * (0.014 + wetness * 0.022)
+            * (1.0 - emissive_mask)
+            * shadowed_region_lift;
+        hdr += local_rim;
     }
-    hdr += base_raw * emissive_strength;
+    hdr += albedo_sample.rgb * emissive_strength;
     let surface_fresnel = 0.035 + pow(1.0 - max(dot(normal, view_direction), 0.0), 5.0) * 0.72;
-    let puddle_visibility = smoothstep(0.06, 0.64, water_coverage) * (1.0 - smoothstep(0.42, 0.90, effective_surface.x));
-    let base_reflected_weight = clamp(
-        (surface_fresnel + surface_raw.y * 0.38) * puddle_visibility * (0.74 + impact * 0.28) * (1.0 - reflected_roughness * 0.22),
-        0.0,
-        0.78
+    let puddle_visibility = max(
+        smoothstep(0.06, 0.64, water_coverage) * (1.0 - smoothstep(0.42, 0.90, effective_surface.x)),
+        glass_mask * 0.92
     );
-    let lit_luminance = max(luminance(hdr), 0.02);
+    let base_reflected_weight = clamp(
+        (surface_fresnel + surface_raw.y * 0.38 + glass_mask * 0.18)
+            * puddle_visibility
+            * (0.92 + impact * 0.34)
+            * (1.0 - reflected_roughness * 0.16),
+        0.0,
+        1.12
+    );
+    let lit_luminance = max(luminance(hdr), 0.05);
     let reflection_luminance = max(luminance(reflected), 0.0001);
-    let reflection_energy_cap = lit_luminance * (0.30 + water_coverage * 0.56 + surface_fresnel * 0.34);
+    let reflection_energy_cap =
+        lit_luminance * (0.34 + water_coverage * 0.82 + surface_fresnel * 0.38 + glass_mask * 0.26)
+        + water_coverage * (0.10 + surface_fresnel * 0.22 + glass_mask * 0.14);
     let reflected_weight = min(base_reflected_weight, reflection_energy_cap / reflection_luminance);
     hdr += reflected * reflected_weight;
     let rain_light_mask = clamp(luminance(hdr) * 0.24 + emissive_strength * 0.05, 0.04, 1.0);

@@ -115,6 +115,36 @@ fn aaa_scene_loads_cc0_pbr_assets() {
 }
 
 #[test]
+fn aaa_scene_uses_generated_puddle_breakup_maps() {
+    let scene = build_aaa_scene("assets/aaa").expect("AAA scene");
+    let puddle_material_index = scene
+        .materials
+        .iter()
+        .position(|material| material.name == "foreground_clear_puddle")
+        .expect("puddle material");
+    let puddle_material = &scene.materials[puddle_material_index];
+
+    assert!(puddle_material.normal_texture.is_some());
+    assert!(puddle_material.pbr_texture.is_some());
+    assert!(puddle_material.flags.glass);
+    assert!(puddle_material.base_color.a < 0.5);
+    assert_eq!(puddle_material.texture_sample_count, 3);
+    assert!(std::path::Path::new("assets/aaa/puddles/generated_puddle_detail.png").is_file());
+    assert!(std::path::Path::new("assets/aaa/puddles/generated_puddle_normal.png").is_file());
+    assert!(std::path::Path::new("assets/aaa/puddles/generated_puddle_arm.png").is_file());
+
+    let puddles: Vec<_> = scene
+        .meshes
+        .iter()
+        .filter(|mesh| mesh.material_index == puddle_material_index)
+        .collect();
+    assert!(puddles.len() >= 3);
+    assert!(puddles
+        .iter()
+        .all(|mesh| mesh.is_floor_or_ground && !mesh.reflection_proxy));
+}
+
+#[test]
 fn aaa_prepass_is_limited_to_selected_large_occluders() {
     let scene = build_aaa_scene("assets/aaa").expect("AAA scene");
     let prepassed: Vec<_> = scene
@@ -193,13 +223,17 @@ fn aaa_practical_lights_are_shadowed_spots() {
 }
 
 #[test]
-fn live_rain_path_does_not_bind_2d_overlay_assets() {
+fn live_rain_path_uses_generated_detail_atlas_not_flat_overlay_assets() {
     let gpu = include_str!("../src/gpu.rs");
     let rain_shader = include_str!("../src/shaders/rain3d.wgsl");
 
+    assert!(std::path::Path::new("assets/aaa/rain/generated_streak_detail.png").is_file());
+    assert!(gpu.contains("GENERATED_RAIN_STREAK_DETAIL"));
+    assert!(gpu.contains("rain-streak-detail"));
+    assert!(rain_shader.contains("var rain_streak_detail: texture_2d<f32>"));
+    assert!(rain_shader.contains("fn generated_streak_detail"));
     assert!(!gpu.contains("rain_overlay"));
     assert!(!gpu.contains("ripples_"));
-    assert!(!rain_shader.contains("texture_2d<f32>"));
     assert!(!rain_shader.contains("rain_overlay"));
     assert!(!rain_shader.contains("ripples_"));
     assert!(rain_shader.contains("texture_depth_2d"));
@@ -221,6 +255,7 @@ fn live_rain_uses_volumetric_prism_geometry() {
 #[test]
 fn rain_impacts_reflections_and_streaks_share_weather_field() {
     let gpu = include_str!("../src/gpu.rs");
+    let geometry_shader = include_str!("../src/shaders/geometry.wgsl");
     let rain_shader = include_str!("../src/shaders/rain3d.wgsl");
     let lighting_shader = include_str!("../src/shaders/lighting.wgsl");
     let reflection_shader = include_str!("../src/shaders/reflections.wgsl");
@@ -242,6 +277,16 @@ fn rain_impacts_reflections_and_streaks_share_weather_field() {
     assert!(gpu.contains("uniform_entry(7, wgpu::ShaderStages::COMPUTE)"));
     assert!(gpu.contains("reflection_proxy_uniform(&scene)"));
     assert!(gpu.contains("uniform_entry(10, wgpu::ShaderStages::COMPUTE)"));
+    assert!(geometry_shader.contains("let material_flag = material.surface.w"));
+    assert!(
+        geometry_shader.contains("output.normal_flags = vec4<f32>(mapped_normal, material_flag)")
+    );
+    assert!(gpu.contains("translucent_albedo_target(ALBEDO_FORMAT)"));
+    assert!(lighting_shader.contains("glass_mask"));
+    assert!(reflection_shader.contains("glass_mask"));
+    assert!(reflection_shader.contains("water_glass_mask"));
+    assert!(reflection_shader.contains("upright_glass_mask"));
+    assert!(reflection_shader.contains("source_pixel.x & 1u"));
     assert!(lighting_shader.contains("reflection_energy_cap"));
 }
 
@@ -260,7 +305,8 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     assert!(lighting_shader.contains("let fd90 = 0.5 + 2.0 * ldoth * ldoth * roughness"));
     assert!(lighting_shader.contains("specular_occlusion"));
     assert!(lighting_shader.contains("distance_to_light >= position_radius.w"));
-    assert!(lighting_shader.contains("cone <= 0.001"));
+    assert!(lighting_shader.contains("outer_halo"));
+    assert!(lighting_shader.contains("spot_presence"));
     assert!(lighting_shader.contains("local_shadow_weight > 0.001"));
     assert!(ssr_shader.contains("fn surface_direct_radiance"));
     assert!(!reflection_shader.contains("fn trace_alley_proxy"));

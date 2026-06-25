@@ -16,10 +16,10 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
-    local_position_radius: array<vec4<f32>, 4>,
-    local_color_intensity: array<vec4<f32>, 4>,
-    local_direction_outer: array<vec4<f32>, 4>,
-    local_inner_shadow: array<vec4<f32>, 4>,
+    local_position_radius: array<vec4<f32>, 6>,
+    local_color_intensity: array<vec4<f32>, 6>,
+    local_direction_outer: array<vec4<f32>, 6>,
+    local_inner_shadow: array<vec4<f32>, 6>,
 };
 
 struct ReflectionProxies {
@@ -101,6 +101,15 @@ fn rain_wind_direction() -> vec3<f32> {
     ));
 }
 
+fn transparent_underlay(world_position: vec3<f32>) -> vec3<f32> {
+    let asphalt = vec3<f32>(0.018, 0.022, 0.025);
+    let concrete = vec3<f32>(0.060, 0.058, 0.052);
+    let walkway = smoothstep(3.45, 4.75, abs(world_position.x));
+    let base = mix(asphalt, concrete, walkway);
+    let stain = layered_noise(world_position.xz * 0.55 + vec2<f32>(17.3, 4.1));
+    return base * mix(0.72, 1.08, stain);
+}
+
 fn rain_wetness(world_position: vec3<f32>, normal: vec3<f32>, surface: vec4<f32>) -> f32 {
     let time = camera.position_time.w;
     let upward = smoothstep(0.10, 0.86, normal.y);
@@ -131,8 +140,11 @@ fn spot_cone_attenuation(light_index: u32, light_to_surface: vec3<f32>) -> f32 {
     }
     let direction_outer = lights.local_direction_outer[light_index];
     let spot_direction = safe_normalize(direction_outer.xyz);
-    let cone = clamp((dot(light_to_surface, spot_direction) - direction_outer.w) / max(flags.x - direction_outer.w, 0.0001), 0.0, 1.0);
-    return cone * cone * (3.0 - 2.0 * cone);
+    let alignment = dot(light_to_surface, spot_direction);
+    let cone = clamp((alignment - direction_outer.w) / max(flags.x - direction_outer.w, 0.0001), 0.0, 1.0);
+    let smooth_core = cone * cone * (3.0 - 2.0 * cone);
+    let outer_halo = smoothstep(direction_outer.w - 0.20, direction_outer.w + 0.015, alignment) * 0.24;
+    return max(smooth_core, outer_halo * (1.0 - smooth_core * 0.45));
 }
 
 fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
@@ -140,7 +152,8 @@ fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
     if flags.w < 0.5 {
         return 1.0;
     }
-    return mix(0.42, 1.0, clamp(cone, 0.0, 1.0));
+    let spot_presence = smoothstep(0.015, 0.16, cone);
+    return mix(0.26, 1.0, clamp(cone, 0.0, 1.0)) * spot_presence;
 }
 
 
@@ -229,11 +242,15 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         return;
     }
 
-    let normal = normalize(textureLoad(normals, vec2<i32>(source_pixel), 0).xyz);
+    let normal_flags = textureLoad(normals, vec2<i32>(source_pixel), 0);
+    let normal = normalize(normal_flags.xyz);
+    let glass_mask = smoothstep(0.85, 1.0, normal_flags.w);
+    let water_glass_mask = glass_mask * smoothstep(0.48, 0.82, normal.y);
+    let upright_glass_mask = glass_mask * (1.0 - water_glass_mask);
     let uv = (vec2<f32>(source_pixel) + 0.5) / vec2<f32>(source_size);
     let world_position = reconstruct_world_position(uv, scene_depth);
-    let wetness = rain_wetness(world_position, normal, surface);
-    let effective_roughness = mix(surface.x, 0.032, wetness * 0.84);
+    let wetness = max(rain_wetness(world_position, normal, surface), glass_mask * 0.94);
+    let effective_roughness = mix(surface.x, 0.022, wetness * 0.88);
     if effective_roughness > 0.72 && wetness < 0.06 {
         textureStore(output_reflection, vec2<i32>(invocation.xy), vec4<f32>(0.0));
         return;
@@ -256,7 +273,8 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         * lights.directional_color_intensity.w
         * 0.85;
     var local_reflection = vec3<f32>(0.0);
-    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 4.0));
+    let wet_puddle = max(smoothstep(0.06, 0.64, wetness), glass_mask);
+    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
     for (var light_index = 0u; light_index < local_count; light_index += 1u) {
         let position_radius = lights.local_position_radius[light_index];
         let to_light = position_radius.xyz - world_position;
@@ -264,14 +282,28 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         let light_direction = to_light / max(distance_to_light, 0.0001);
         let light_to_surface = -light_direction;
         let attenuation = pow(clamp(1.0 - distance_to_light / position_radius.w, 0.0, 1.0), 2.0);
-        let alignment = pow(max(dot(reflected, light_direction), 0.0), 28.0);
+        let mirror_alignment = max(dot(reflected, light_direction), 0.0);
+        let tight_alignment = pow(mirror_alignment, 28.0);
+        let wet_alignment = pow(mirror_alignment, 5.0);
+        let ground_streak = 1.0 / (
+            1.0
+            + abs(world_position.x - position_radius.x) * 0.13
+            + abs(world_position.z - position_radius.z) * 0.038
+        );
+        let water_streak =
+            wet_puddle
+            * ground_streak
+            * (1.0 / (1.0 + distance_to_light * 0.055))
+            * 0.34;
+        let alignment = mix(tight_alignment, wet_alignment * (0.18 + ground_streak), wet_puddle);
         let color_intensity = lights.local_color_intensity[light_index];
         let cone = spot_cone_attenuation(light_index, light_to_surface);
         local_reflection += color_intensity.rgb
             * color_intensity.w
-            * attenuation
+            * (attenuation + water_streak)
             * practical_spot_fill(light_index, cone)
-            * alignment;
+            * alignment
+            * mix(1.0, 1.55, wet_puddle);
     }
     let ssr_size = textureDimensions(half_resolution_ssr);
     let ssr_uv = (vec2<f32>(source_pixel) + 0.5) / vec2<f32>(source_size);
@@ -288,15 +320,30 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         * mix(1.0, 0.72, effective_roughness)
         * (1.0 / (1.0 + proxy_hit_result.t * 0.018))
         * proxy_hit_result.hit;
-    let wet_puddle = smoothstep(0.06, 0.64, wetness);
     let view_fresnel = 0.035 + pow(1.0 - max(dot(normal, -view_ray), 0.0), 5.0) * 0.68;
     let response = clamp(
-        (1.0 - effective_roughness) * (view_fresnel + surface.y * 0.36) * (0.48 + wet_puddle * 0.88),
+        (1.0 - effective_roughness) * (view_fresnel + surface.y * 0.36) * (0.54 + wet_puddle * 1.18),
         0.0,
-        1.05
+        1.24
     );
     let traced_reflection = mix(proxy_reflection, ssr_reflection, ssr_hit);
-    let current_reflection = (sky * 0.62 + moon + local_reflection * 1.18 + traced_reflection * 1.24) * response;
+    let exterior_reflection = (sky * 0.62 + moon + local_reflection * 1.46 + traced_reflection * 1.34) * response;
+    let interior_line = f32(source_pixel.x & 1u);
+    let underlayer_reflection =
+        transparent_underlay(world_position) * (0.22 + wet_puddle * 0.28)
+        + local_reflection * 0.18
+        + traced_reflection * 0.38;
+    let glass_interlaced = mix(
+        exterior_reflection,
+        underlayer_reflection,
+        interior_line * upright_glass_mask
+    );
+    let water_reflection = exterior_reflection + underlayer_reflection * (0.10 + wet_puddle * 0.10);
+    let current_reflection = mix(
+        mix(exterior_reflection, glass_interlaced, upright_glass_mask),
+        water_reflection,
+        water_glass_mask
+    );
     let temporal_reflection = temporal_reconstruct_reflection(
         source_pixel,
         source_size,

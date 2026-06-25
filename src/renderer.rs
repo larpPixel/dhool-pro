@@ -200,6 +200,7 @@ struct GPixel {
     material_index: usize,
     material_id: u8,
     albedo: Color,
+    opacity: f32,
     normal: Vec3,
     world: Vec3,
     roughness: f32,
@@ -219,6 +220,7 @@ impl Default for GPixel {
             material_index: 0,
             material_id: 0,
             albedo: Color::BLACK,
+            opacity: 1.0,
             normal: Vec3::Y,
             world: Vec3::ZERO,
             roughness: 1.0,
@@ -267,6 +269,8 @@ struct ScreenVertex {
     depth: f32,
     world: Vec3,
     normal: Vec3,
+    tangent: Vec3,
+    tangent_sign: f32,
     color: Color,
     uv: Vec2,
 }
@@ -520,6 +524,8 @@ impl CpuRenderer {
             depth: 1.0,
             world: Vec3::ZERO,
             normal: Vec3::Y,
+            tangent: Vec3::X,
+            tangent_sign: 1.0,
             color: Color::WHITE,
             uv: Vec2::ZERO,
         }; 3];
@@ -543,12 +549,20 @@ impl CpuRenderer {
                 vertex.normal.z,
                 0.0,
             ));
+            let t4 = model.mul_vec4(Vec4::new(
+                vertex.tangent.x,
+                vertex.tangent.y,
+                vertex.tangent.z,
+                0.0,
+            ));
             out[i] = ScreenVertex {
                 x: (ndc.x * 0.5 + 0.5) * (self.config.width - 1) as f32,
                 y: (1.0 - (ndc.y * 0.5 + 0.5)) * (self.config.height - 1) as f32,
                 depth: saturate(ndc.z),
                 world: world4.xyz(),
                 normal: n4.xyz().normalize_or_zero(),
+                tangent: t4.xyz().normalize_or_zero(),
+                tangent_sign: vertex.tangent_sign,
                 color: vertex.color,
                 uv: vertex.uv,
             };
@@ -617,8 +631,20 @@ impl CpuRenderer {
                 if depth_only {
                     continue;
                 }
-                let normal = (tri[0].normal * w0 + tri[1].normal * w1 + tri[2].normal * w2)
+                let geometric_normal =
+                    (tri[0].normal * w0 + tri[1].normal * w1 + tri[2].normal * w2)
+                        .normalize_or_zero();
+                let tangent = (tri[0].tangent * w0 + tri[1].tangent * w1 + tri[2].tangent * w2)
                     .normalize_or_zero();
+                let tangent = (tangent - geometric_normal * tangent.dot(geometric_normal))
+                    .normalize_or_zero();
+                let tangent = if tangent.length() > 0.001 {
+                    tangent
+                } else {
+                    Vec3::X
+                };
+                let tangent_sign =
+                    tri[0].tangent_sign * w0 + tri[1].tangent_sign * w1 + tri[2].tangent_sign * w2;
                 let world = tri[0].world * w0 + tri[1].world * w1 + tri[2].world * w2;
                 let vertex_color = tri[0].color * w0 + tri[1].color * w1 + tri[2].color * w2;
                 let uv = tri[0].uv * w0 + tri[1].uv * w1 + tri[2].uv * w2;
@@ -627,16 +653,56 @@ impl CpuRenderer {
                     .as_ref()
                     .map(|texture| texture.sample_repeat(uv))
                     .unwrap_or(Color::WHITE);
+                let source_albedo = material.base_color * vertex_color * texture_color;
+                let opacity = if material.flags.glass {
+                    source_albedo.a.clamp(0.04, 1.0)
+                } else {
+                    1.0
+                };
+                let under_albedo = if material.flags.glass {
+                    if buffers.gbuffer[idx].covered {
+                        buffers.gbuffer[idx].albedo.to_vec3()
+                    } else {
+                        transparent_underlay(world)
+                    }
+                } else {
+                    source_albedo.to_vec3()
+                };
+                let blended_albedo = if material.flags.glass {
+                    Color::from_vec3(
+                        lerp3(under_albedo, source_albedo.to_vec3(), opacity),
+                        opacity,
+                    )
+                } else {
+                    source_albedo
+                };
+                let sampled_normal = material
+                    .normal_texture
+                    .as_ref()
+                    .map(|texture| texture.sample_repeat(uv))
+                    .unwrap_or(Color::new(0.5, 0.5, 1.0, 1.0));
                 let pbr = material
                     .pbr_texture
                     .as_ref()
                     .map(|texture| texture.sample_repeat(uv))
                     .unwrap_or(Color::new(1.0, 1.0, 1.0, 1.0));
+                let local_normal = Vec3::new(
+                    sampled_normal.r * 2.0 - 1.0,
+                    sampled_normal.g * 2.0 - 1.0,
+                    sampled_normal.b * 2.0 - 1.0,
+                );
+                let tangent_w = if tangent_sign < 0.0 { -1.0 } else { 1.0 };
+                let bitangent = geometric_normal.cross(tangent).normalize_or_zero() * tangent_w;
+                let normal = (tangent * local_normal.x
+                    + bitangent * local_normal.y
+                    + geometric_normal * local_normal.z)
+                    .normalize_or_zero();
                 buffers.gbuffer[idx] = GPixel {
                     covered: true,
                     material_index,
                     material_id: material.material_id,
-                    albedo: material.base_color * vertex_color * texture_color,
+                    albedo: blended_albedo,
+                    opacity,
                     normal,
                     world,
                     roughness: material.roughness * pbr.g,
@@ -774,23 +840,40 @@ impl CpuRenderer {
                 if !g.covered || (g.roughness > 0.55 && !g.glass) {
                     continue;
                 }
-                if buffers.reflections[idx].luminance() < 0.001 {
-                    let noise = (blue_noise_hash(x, y, self.config.frame_index, 0xA53C_91E9) & 255)
-                        as f32
-                        / 255.0;
-                    let sky = scene.sky_color * (0.28 + noise * 0.04);
-                    let emissive = scene
-                        .materials
-                        .iter()
-                        .filter(|m| m.flags.emissive)
-                        .fold(Color::BLACK, |acc, m| acc + m.emission * 0.12);
-                    let view_ray = (g.world - scene.camera.position).normalize_or_zero();
-                    let reflected = reflect(view_ray, g.normal);
-                    let proxy = trace_alley_proxy(scene, g.world + g.normal * 0.045, reflected);
-                    let glass_line = if g.glass && x % 2 == 0 { 1.25 } else { 1.0 };
-                    buffers.reflections[idx] =
-                        (sky + emissive * 0.55 + proxy) * (1.0 - g.roughness) * glass_line;
-                }
+                let noise = (blue_noise_hash(x, y, self.config.frame_index, 0xA53C_91E9) & 255)
+                    as f32
+                    / 255.0;
+                let view_ray = (g.world - scene.camera.position).normalize_or_zero();
+                let reflected = reflect(view_ray, g.normal).normalize_or_zero();
+                let sky_factor = 0.24 + reflected.y.max(0.0) * 0.18 + noise * 0.04;
+                let sky = scene.sky_color * sky_factor;
+                let emissive = scene
+                    .materials
+                    .iter()
+                    .filter(|m| m.flags.emissive)
+                    .fold(Color::BLACK, |acc, m| acc + m.emission * 0.08);
+                let proxy = trace_alley_proxy(scene, g.world + g.normal * 0.045, reflected);
+                let local = local_reflection_radiance(scene, g.world, reflected, g.glass);
+                let ripple = 0.86 + noise * 0.18;
+                let glass_boost = if g.glass { 1.62 } else { 1.0 };
+                let glass_line = if g.glass && (x + y * 3) % 7 == 0 {
+                    1.22
+                } else {
+                    1.0
+                };
+                let candidate = (sky + emissive * 0.08 + proxy * 1.16 + local * 1.15)
+                    * (1.0 - g.roughness)
+                    * glass_boost
+                    * glass_line
+                    * ripple;
+                let existing = buffers.reflections[idx];
+                buffers.reflections[idx] = if g.glass {
+                    existing * 0.20 + candidate
+                } else if existing.luminance() < 0.001 {
+                    candidate
+                } else {
+                    existing * 0.58 + candidate * 0.42
+                };
             }
         }
     }
@@ -871,8 +954,14 @@ impl CpuRenderer {
                     light_rgb * (ndoth.powf(power) * g.specular * shadow * specular_ao) * fresnel;
             }
 
+            let opacity = if g.glass {
+                g.opacity.clamp(0.04, 1.0)
+            } else {
+                1.0
+            };
             let albedo = g.albedo.to_vec3();
-            let mut rgb = diffuse_irradiance * albedo * ao;
+            let transparent_diffuse_weight = if g.glass { 0.24 + opacity * 0.18 } else { 1.0 };
+            let mut rgb = diffuse_irradiance * albedo * ao * transparent_diffuse_weight;
             rgb += specular * (0.45 + 0.55 * ao);
             rgb += buffers.reflections[idx].to_vec3() * (g.specular * (1.0 - g.roughness));
             if g.emissive {
@@ -1147,6 +1236,124 @@ fn specular_occlusion(ndotv: f32, ao: f32, roughness: f32) -> f32 {
     ((ndotv + ao).powf(2.0_f32.powf(-16.0 * roughness.max(0.04) - 1.0)) - 1.0 + ao).clamp(0.0, 1.0)
 }
 
+fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = ((value - edge0) / (edge1 - edge0).max(1.0e-5)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn local_reflection_radiance(
+    scene: &RenderScene,
+    world: Vec3,
+    reflected: Vec3,
+    glass: bool,
+) -> Color {
+    let mut radiance = Vec3::ZERO;
+    for light in &scene.lights {
+        match light.kind {
+            LightKind::Directional { direction } => {
+                let light_direction = (-direction).normalize_or_zero();
+                let alignment = reflected.dot(light_direction).max(0.0).powf(96.0);
+                radiance += light.color.to_vec3() * (light.intensity * alignment * 0.45);
+            }
+            LightKind::Local { position, radius } => {
+                let to_light = position - world;
+                let distance_to_light = to_light.length();
+                if distance_to_light >= radius {
+                    continue;
+                }
+                let light_direction = to_light / distance_to_light.max(1.0e-4);
+                let attenuation = (1.0 - distance_to_light / radius).powi(2);
+                let alignment = reflected.dot(light_direction).max(0.0);
+                let glossy_lobe = alignment.powf(if glass { 5.0 } else { 13.0 });
+                let ground_streak = ground_reflection_streak(world, position);
+                let water_streak = water_fixture_streak(world, position, distance_to_light, glass);
+                radiance += light.color.to_vec3()
+                    * (light.intensity
+                        * (attenuation + water_streak)
+                        * ground_streak
+                        * (0.04 + glossy_lobe * if glass { 1.85 } else { 0.92 }));
+            }
+            LightKind::Spot {
+                position,
+                direction,
+                radius,
+                inner_angle_radians,
+                outer_angle_radians,
+            } => {
+                let to_light = position - world;
+                let distance_to_light = to_light.length();
+                if distance_to_light >= radius {
+                    continue;
+                }
+                let light_direction = to_light / distance_to_light.max(1.0e-4);
+                let light_to_surface = -light_direction;
+                let inner = inner_angle_radians.cos();
+                let outer = outer_angle_radians.cos();
+                let cone = smoothstep(
+                    outer,
+                    inner,
+                    light_to_surface.dot(direction.normalize_or_zero()),
+                );
+                let halo = smoothstep(
+                    outer - 0.20,
+                    outer + 0.015,
+                    light_to_surface.dot(direction.normalize_or_zero()),
+                ) * 0.24;
+                let spot = cone.max(halo * (1.0 - cone * 0.45));
+                if spot <= 0.001 {
+                    continue;
+                }
+                let attenuation = (1.0 - distance_to_light / radius).powi(2);
+                let alignment = reflected.dot(light_direction).max(0.0);
+                let glossy_lobe = alignment.powf(if glass { 5.0 } else { 13.0 });
+                let ground_streak = ground_reflection_streak(world, position);
+                let water_streak = water_fixture_streak(world, position, distance_to_light, glass);
+                radiance += light.color.to_vec3()
+                    * (light.intensity
+                        * (attenuation + water_streak)
+                        * spot
+                        * ground_streak
+                        * (0.05 + glossy_lobe * if glass { 2.15 } else { 1.05 }));
+            }
+        }
+    }
+    Color::from_vec3(radiance, 1.0)
+}
+
+fn ground_reflection_streak(world: Vec3, light_position: Vec3) -> f32 {
+    if world.y > 0.12 {
+        return 1.0;
+    }
+    let lateral = (world.x - light_position.x).abs();
+    let depth = (world.z - light_position.z).abs();
+    1.0 / (1.0 + lateral * 0.13 + depth * 0.038)
+}
+
+fn transparent_underlay(world: Vec3) -> Vec3 {
+    let asphalt = Vec3::new(0.018, 0.022, 0.025);
+    let concrete = Vec3::new(0.060, 0.058, 0.052);
+    let walkway = smoothstep(3.45, 4.75, world.x.abs());
+    let base = lerp3(asphalt, concrete, walkway);
+    let stain = ((world.x * 11.7 + world.z * 5.3).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+    base * (0.72 + stain * 0.36)
+}
+
+fn water_fixture_streak(
+    world: Vec3,
+    light_position: Vec3,
+    distance_to_light: f32,
+    glass: bool,
+) -> f32 {
+    if !glass || world.y > 0.12 {
+        return 0.0;
+    }
+    let lateral = (world.x - light_position.x).abs();
+    let longitudinal = (world.z - light_position.z).abs();
+    let lane = 1.0 / (1.0 + lateral * lateral * 0.10);
+    let length_fade = 1.0 / (1.0 + longitudinal * 0.045 + distance_to_light * 0.055);
+    lane * length_fade * 0.34
+}
+
 fn trace_alley_proxy(scene: &RenderScene, origin: Vec3, ray: Vec3) -> Color {
     let mut best_t = 1_000_000.0_f32;
     let mut best_radiance = Vec3::ZERO;
@@ -1271,23 +1478,17 @@ fn proxy_direct_radiance(scene: &RenderScene, position: Vec3, normal: Vec3, albe
 
 fn proxy_emissive_radiance(position: Vec3) -> Vec3 {
     let mut emission = Vec3::ZERO;
-    if (position.x - 4.88).abs() < 0.20
-        && (position.z + 6.7).abs() < 1.38
-        && (position.y - 2.65).abs() < 0.24
-    {
-        emission += Vec3::new(9.5, 2.2, 0.28);
+    if (position.x - 4.88).abs() < 0.20 && (position.z + 6.7).abs() < 1.38 {
+        let smear = 1.0 - smoothstep(0.18, 2.10, (position.y - 2.65).abs());
+        emission += Vec3::new(9.5, 2.2, 0.28) * smear;
     }
-    if (position.x + 4.88).abs() < 0.20
-        && (position.z + 5.4).abs() < 1.78
-        && (position.y - 2.8).abs() < 0.22
-    {
-        emission += Vec3::new(0.65, 6.2, 9.5);
+    if (position.x + 4.88).abs() < 0.20 && (position.z + 5.4).abs() < 1.78 {
+        let smear = 1.0 - smoothstep(0.18, 2.25, (position.y - 2.8).abs());
+        emission += Vec3::new(0.65, 6.2, 9.5) * smear;
     }
-    if (position.z + 18.38).abs() < 0.22
-        && (position.x + 1.7).abs() < 2.08
-        && (position.y - 3.25).abs() < 0.24
-    {
-        emission += Vec3::new(0.55, 5.8, 8.8);
+    if (position.z + 18.38).abs() < 0.22 && (position.x + 1.7).abs() < 2.08 {
+        let smear = 1.0 - smoothstep(0.22, 2.65, (position.y - 3.25).abs());
+        emission += Vec3::new(0.55, 5.8, 8.8) * smear;
     }
     emission
 }

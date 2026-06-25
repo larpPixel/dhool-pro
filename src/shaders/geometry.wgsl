@@ -45,6 +45,8 @@ struct GBufferOutput {
     @location(3) motion_vectors: vec4<f32>,
 };
 
+const EMISSIVE_SCALE: f32 = 12.0;
+
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
@@ -70,16 +72,17 @@ fn fs_main(input: VertexOutput) -> GBufferOutput {
     let bitangent = normalize(cross(geometric_normal, tangent)) * input.tangent.w;
     let mapped_normal = normalize(mat3x3<f32>(tangent, bitangent, geometric_normal) * sampled_normal);
     let base = material.base_color * input.color * sampled;
-    let emission_strength = material.surface.w;
+    let material_flag = material.surface.w;
+    let emission_strength = material.emission.a;
     let emission_chroma = material.emission.rgb / max(max(material.emission.r, material.emission.g), max(material.emission.b, 0.0001));
     let emissive_mask = step(0.0001, emission_strength);
     output.albedo = vec4<f32>(mix(base.rgb, emission_chroma, emissive_mask), base.a);
-    output.normal_flags = vec4<f32>(mapped_normal, material.surface.w);
+    output.normal_flags = vec4<f32>(mapped_normal, material_flag);
     output.pbr_material = vec4<f32>(
         clamp(material.surface.x * sampled_pbr.g, 0.04, 1.0),
         clamp(material.surface.y * sampled_pbr.b, 0.0, 1.0),
         clamp(material.surface.z * sampled_pbr.r, 0.0, 1.0),
-        clamp(emission_strength / material.emission.a, 0.0, 1.0)
+        clamp(emission_strength / EMISSIVE_SCALE, 0.0, 1.0)
     );
     let current_ndc = input.current_clip_position.xy / max(input.current_clip_position.w, 0.00001);
     let previous_ndc = input.previous_clip_position.xy / max(input.previous_clip_position.w, 0.00001);

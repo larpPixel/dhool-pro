@@ -9,10 +9,10 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
-    local_position_radius: array<vec4<f32>, 4>,
-    local_color_intensity: array<vec4<f32>, 4>,
-    local_direction_outer: array<vec4<f32>, 4>,
-    local_inner_shadow: array<vec4<f32>, 4>,
+    local_position_radius: array<vec4<f32>, 6>,
+    local_color_intensity: array<vec4<f32>, 6>,
+    local_direction_outer: array<vec4<f32>, 6>,
+    local_inner_shadow: array<vec4<f32>, 6>,
 };
 
 @group(0) @binding(0) var depth_copy: texture_2d<f32>;

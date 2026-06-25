@@ -529,21 +529,32 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         "foreground_clear_puddle",
         SolidMaterialParams {
             class: MaterialClass::Glass,
-            base_color: Color::rgb(0.018, 0.024, 0.027),
-            roughness: 0.035,
+            base_color: Color::new(0.026, 0.034, 0.042, 0.18),
+            roughness: 0.038,
             metallic: 0.0,
             specular_intensity: 1.0,
-            cavity: 0.96,
+            cavity: 1.0,
             material_id: 18,
         },
     ));
+    {
+        let load_puddle_texture = |filename: &str| {
+            let path = root.join("puddles").join(filename);
+            TextureImage::from_path(&path)
+                .map_err(|message| GltfImportError::Gltf(format!("{}: {message}", path.display())))
+        };
+        let puddle = &mut materials[puddle_material];
+        puddle.normal_texture = Some(load_puddle_texture("generated_puddle_normal.png")?);
+        puddle.pbr_texture = Some(load_puddle_texture("generated_puddle_arm.png")?);
+        puddle.texture_sample_count = 3;
+    }
 
     let mut scene = RenderScene {
         camera: Camera {
-            position: Vec3::new(0.55, 1.52, 5.8),
-            target: Vec3::new(0.0, 1.2, -6.5),
+            position: Vec3::new(0.18, 1.34, 5.45),
+            target: Vec3::new(0.03, 1.02, -7.85),
             up: Vec3::Y,
-            vertical_fov_radians: 58.0_f32.to_radians(),
+            vertical_fov_radians: 61.0_f32.to_radians(),
             near: 0.05,
             far: 60.0,
         },
@@ -585,9 +596,49 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 intensity: 7.2,
                 casts_shadow: true,
             },
+            Light {
+                name: "right_marker_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(4.08, 2.85, -3.25),
+                    radius: 5.8,
+                },
+                color: Color::rgb(1.0, 0.32, 0.08),
+                intensity: 4.8,
+                casts_shadow: false,
+            },
+            Light {
+                name: "right_barrel_read_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(3.12, 0.92, -3.35),
+                    radius: 3.65,
+                },
+                color: Color::rgb(1.0, 0.42, 0.16),
+                intensity: 2.25,
+                casts_shadow: false,
+            },
+            Light {
+                name: "left_barrel_read_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(-3.18, 1.02, -4.35),
+                    radius: 3.45,
+                },
+                color: Color::rgb(0.18, 0.66, 1.0),
+                intensity: 1.55,
+                casts_shadow: false,
+            },
+            Light {
+                name: "right_far_marker_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(4.05, 3.10, -12.9),
+                    radius: 5.0,
+                },
+                color: Color::rgb(1.0, 0.30, 0.07),
+                intensity: 3.6,
+                casts_shadow: false,
+            },
         ],
-        sky_color: Color::rgb(0.008, 0.018, 0.045),
-        ambient_color: Color::rgb(0.018, 0.03, 0.06),
+        sky_color: Color::rgb(0.006, 0.014, 0.034),
+        ambient_color: Color::rgb(0.024, 0.030, 0.046),
     };
 
     scene.meshes.extend([
@@ -947,19 +998,27 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         ),
         puddle_mesh(
             "foreground_reflection_puddle",
-            3.15,
-            5.6,
+            2.05,
+            3.72,
             puddle_material,
-            Vec2::new(1.0, 1.7),
-            Vec3::new(0.35, -0.049, 1.0),
+            Vec2::new(1.15, 2.2),
+            Vec3::new(0.22, -0.049, 0.95),
+        ),
+        puddle_mesh(
+            "left_cyan_reflection_slick",
+            1.05,
+            5.80,
+            puddle_material,
+            Vec2::new(0.9, 2.9),
+            Vec3::new(-1.82, -0.048, -3.65),
         ),
         puddle_mesh(
             "mid_alley_reflection_puddle",
-            2.4,
-            4.2,
+            2.25,
+            3.85,
             puddle_material,
-            Vec2::new(1.0, 1.4),
-            Vec3::new(1.10, -0.048, -6.6),
+            Vec2::new(1.1, 1.8),
+            Vec3::new(1.20, -0.048, -7.05),
         ),
     ]);
 
@@ -980,9 +1039,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         root.join("models/Barrel_01/Barrel_01_1k.gltf"),
         "barrel",
         &[
-            Mat4::translation(Vec3::new(-3.55, 0.02, -4.3)),
-            Mat4::rotation_y(0.35) * Mat4::translation(Vec3::new(-3.0, 0.02, -4.55)),
-            Mat4::rotation_y(-0.5) * Mat4::translation(Vec3::new(3.55, 0.02, -12.1)),
+            Mat4::translation(Vec3::new(-3.18, 0.02, -5.20)),
+            Mat4::rotation_y(0.35) * Mat4::translation(Vec3::new(-2.58, 0.02, -5.68)),
+            Mat4::rotation_y(-0.5) * Mat4::translation(Vec3::new(3.18, 0.02, -10.95)),
         ],
     )?;
     append_gltf_instances(
@@ -990,9 +1049,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         root.join("models/street_lamp_01/street_lamp_01_1k.gltf"),
         "street_lamp",
         &[
-            Mat4::translation(Vec3::new(-4.25, 0.02, 2.2)),
-            Mat4::translation(Vec3::new(4.2, 0.02, -4.5)),
-            Mat4::translation(Vec3::new(-4.2, 0.02, -11.8)),
+            Mat4::translation(Vec3::new(-3.48, 0.02, -0.75)),
+            Mat4::translation(Vec3::new(3.68, 0.02, -6.65)),
+            Mat4::translation(Vec3::new(-3.78, 0.02, -13.15)),
         ],
     )?;
     append_gltf_instances(
@@ -1011,10 +1070,10 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         &[
             Mat4::scale(Vec3::splat(0.1))
                 * Mat4::rotation_y(90.0_f32.to_radians())
-                * Mat4::translation(Vec3::new(-4.35, 0.02, -3.5)),
+                * Mat4::translation(Vec3::new(-3.82, 0.02, -3.95)),
             Mat4::scale(Vec3::splat(0.1))
                 * Mat4::rotation_y(90.0_f32.to_radians())
-                * Mat4::translation(Vec3::new(-4.35, 0.02, -5.0)),
+                * Mat4::translation(Vec3::new(-3.84, 0.02, -6.65)),
         ],
     )?;
     append_gltf_instances(
@@ -1023,9 +1082,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         "utility_box",
         &[
             Mat4::rotation_y(-90.0_f32.to_radians())
-                * Mat4::translation(Vec3::new(4.62, 0.05, -2.1)),
+                * Mat4::translation(Vec3::new(4.12, 0.05, -2.35)),
             Mat4::rotation_y(90.0_f32.to_radians())
-                * Mat4::translation(Vec3::new(-4.62, 0.05, -13.8)),
+                * Mat4::translation(Vec3::new(-4.12, 0.05, -13.85)),
         ],
     )?;
     append_gltf_instances(
@@ -1033,8 +1092,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         root.join("models/old_tyre/old_tyre_1k.gltf"),
         "old_tyre",
         &[
-            Mat4::rotation_y(0.22) * Mat4::translation(Vec3::new(-3.82, 0.34, -9.1)),
-            Mat4::rotation_y(-0.35) * Mat4::translation(Vec3::new(3.78, 0.34, -13.2)),
+            Mat4::rotation_y(0.22) * Mat4::translation(Vec3::new(-3.35, 0.34, -8.85)),
+            Mat4::rotation_y(-0.35) * Mat4::translation(Vec3::new(3.32, 0.34, -12.85)),
         ],
     )?;
     append_gltf_instances(
@@ -1042,8 +1101,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         root.join("models/metal_trash_can/metal_trash_can_1k.gltf"),
         "trash_can",
         &[
-            Mat4::rotation_y(-0.3) * Mat4::translation(Vec3::new(3.7, 0.02, -3.5)),
-            Mat4::rotation_y(0.5) * Mat4::translation(Vec3::new(-3.75, 0.02, -14.2)),
+            Mat4::rotation_y(-0.3) * Mat4::translation(Vec3::new(3.28, 0.02, -4.15)),
+            Mat4::rotation_y(0.5) * Mat4::translation(Vec3::new(-3.28, 0.02, -14.05)),
         ],
     )?;
 
@@ -1188,11 +1247,62 @@ fn puddle_mesh(
     uv_scale: Vec2,
     position: Vec3,
 ) -> Mesh {
-    let mut mesh = plane_mesh(name, width, depth, material_index, uv_scale, position, true);
-    mesh.shadow_class = ShadowCasterClass::None;
-    mesh.prepass_eligible = false;
-    mesh.reflection_proxy = false;
-    mesh
+    let outline = [
+        Vec2::new(-0.56, -0.10),
+        Vec2::new(-0.49, -0.30),
+        Vec2::new(-0.35, -0.44),
+        Vec2::new(-0.12, -0.53),
+        Vec2::new(0.10, -0.50),
+        Vec2::new(0.31, -0.42),
+        Vec2::new(0.49, -0.24),
+        Vec2::new(0.55, -0.03),
+        Vec2::new(0.47, 0.15),
+        Vec2::new(0.32, 0.31),
+        Vec2::new(0.09, 0.45),
+        Vec2::new(-0.14, 0.51),
+        Vec2::new(-0.36, 0.42),
+        Vec2::new(-0.52, 0.24),
+        Vec2::new(-0.60, 0.06),
+    ];
+    let mut vertices = Vec::with_capacity(outline.len() + 1);
+    vertices.push(Vertex {
+        position: Vec3::ZERO,
+        normal: Vec3::Y,
+        tangent: Vec3::X,
+        tangent_sign: 1.0,
+        uv: uv_scale * 0.5,
+        color: Color::WHITE,
+    });
+    for point in outline {
+        vertices.push(Vertex {
+            position: Vec3::new(point.x * width, 0.0, point.y * depth),
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            tangent_sign: 1.0,
+            uv: Vec2::new((point.x + 0.5) * uv_scale.x, (point.y + 0.5) * uv_scale.y),
+            color: Color::WHITE,
+        });
+    }
+    let mut indices = Vec::with_capacity(outline.len());
+    for index in 1..=outline.len() as u32 {
+        let next = if index == outline.len() as u32 {
+            1
+        } else {
+            index + 1
+        };
+        indices.push([0, next, index]);
+    }
+    Mesh {
+        name: name.to_string(),
+        vertices,
+        indices,
+        material_index,
+        transform: Mat4::translation(position),
+        shadow_class: ShadowCasterClass::None,
+        is_floor_or_ground: true,
+        prepass_eligible: false,
+        reflection_proxy: false,
+    }
 }
 
 fn wall_mesh(

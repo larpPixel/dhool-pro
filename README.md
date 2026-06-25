@@ -25,7 +25,8 @@ The GPU frame executes cached directional/local shadow maps, a vertex-only
 partial depth prepass, hardware depth-tested PBR+motion G-buffer rasterization,
 a fullscreen R32 depth copy, half-resolution Hi-Z/fog/SSR compute passes,
 temporal reflections over simplified proxy geometry, light-volume guarded HDR
-deferred lighting with screen-space occlusion, procedural world-space 3D rain,
+deferred lighting with screen-space occlusion, world-space 3D rain with a
+generated streak-detail atlas, textured puddle normals and reflection breakup,
 Kawase bloom, GT tone mapping, and a final SMAA T2x-style edge/persistence
 resolve. Materials use mipmapped base-color, tangent-space normal, and packed
 AO/roughness/metallic maps.
