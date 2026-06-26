@@ -43,8 +43,8 @@ struct ReflectionProxies {
 @group(0) @binding(10) var<uniform> reflection_proxies: ReflectionProxies;
 @group(0) @binding(11) var half_resolution_ssr: texture_2d<f32>;
 
-const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-5.8, 0.18, -19.2);
-const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(11.6, 8.2, 25.2);
+const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-18.5, 0.18, -82.0);
+const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(37.0, 13.5, 100.0);
 
 struct ProxyHit {
     t: f32,

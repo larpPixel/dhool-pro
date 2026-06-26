@@ -623,15 +623,73 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             material_id: 23,
         },
     )?);
+    let city_shopfront_material = materials.len();
+    materials.push(textured_generated_material(
+        "generated_city_shopfront_facade",
+        load_generated_texture(root, "city_shopfront_facade.png")?,
+        TexturedGeneratedMaterialParams {
+            class: MaterialClass::Default,
+            base_color: Color::rgb(0.86, 0.91, 0.94),
+            roughness: 0.54,
+            metallic: 0.0,
+            specular_intensity: 0.30,
+            cavity: 0.86,
+            material_id: 24,
+            emission: Color::BLACK,
+        },
+    ));
+    let city_skyline_material = materials.len();
+    materials.push(textured_generated_material(
+        "generated_city_apartment_skyline",
+        load_generated_texture(root, "city_apartment_skyline.png")?,
+        TexturedGeneratedMaterialParams {
+            class: MaterialClass::Emissive,
+            base_color: Color::rgb(0.70, 0.82, 0.94),
+            roughness: 0.66,
+            metallic: 0.0,
+            specular_intensity: 0.20,
+            cavity: 0.92,
+            material_id: 25,
+            emission: Color::rgb(0.16, 0.30, 0.48),
+        },
+    ));
+    let market_awning_material = materials.len();
+    materials.push(textured_generated_material(
+        "generated_monsoon_market_awning",
+        load_generated_texture(root, "monsoon_market_awning.png")?,
+        TexturedGeneratedMaterialParams {
+            class: MaterialClass::Default,
+            base_color: Color::rgb(0.92, 0.88, 0.78),
+            roughness: 0.62,
+            metallic: 0.0,
+            specular_intensity: 0.38,
+            cavity: 0.88,
+            material_id: 26,
+            emission: Color::BLACK,
+        },
+    ));
+    let rain_black_trim_material = materials.len();
+    materials.push(solid_material(
+        "rain_black_object_trim",
+        SolidMaterialParams {
+            class: MaterialClass::Default,
+            base_color: Color::rgb(0.035, 0.040, 0.045),
+            roughness: 0.55,
+            metallic: 0.0,
+            specular_intensity: 0.35,
+            cavity: 0.82,
+            material_id: 27,
+        },
+    ));
 
     let mut scene = RenderScene {
         camera: Camera {
-            position: Vec3::new(0.24, 1.42, 6.65),
-            target: Vec3::new(0.02, 1.04, -10.75),
+            position: Vec3::new(0.35, 3.05, -30.5),
+            target: Vec3::new(0.0, 2.42, -61.5),
             up: Vec3::Y,
-            vertical_fov_radians: 64.0_f32.to_radians(),
+            vertical_fov_radians: 78.0_f32.to_radians(),
             near: 0.05,
-            far: 80.0,
+            far: 180.0,
         },
         materials,
         meshes: Vec::new(),
@@ -741,6 +799,36 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 intensity: 2.1,
                 casts_shadow: false,
             },
+            Light {
+                name: "city_cross_street_cyan",
+                kind: LightKind::Local {
+                    position: Vec3::new(-8.8, 3.4, -36.0),
+                    radius: 12.5,
+                },
+                color: Color::rgb(0.12, 0.72, 1.0),
+                intensity: 4.4,
+                casts_shadow: false,
+            },
+            Light {
+                name: "market_lane_amber",
+                kind: LightKind::Local {
+                    position: Vec3::new(7.6, 2.9, -44.5),
+                    radius: 13.0,
+                },
+                color: Color::rgb(1.0, 0.48, 0.14),
+                intensity: 4.1,
+                casts_shadow: false,
+            },
+            Light {
+                name: "distant_apartment_window_glow",
+                kind: LightKind::Local {
+                    position: Vec3::new(0.0, 8.2, -72.0),
+                    radius: 28.0,
+                },
+                color: Color::rgb(0.42, 0.68, 1.0),
+                intensity: 2.6,
+                casts_shadow: false,
+            },
         ],
         sky_color: Color::rgb(0.006, 0.014, 0.034),
         ambient_color: Color::rgb(0.024, 0.030, 0.046),
@@ -749,29 +837,29 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
     scene.meshes.extend([
         plane_mesh(
             "rain_darkened_asphalt",
-            7.0,
-            36.0,
+            13.5,
+            96.0,
             0,
-            Vec2::new(3.5, 18.0),
-            Vec3::new(0.0, -0.06, -7.5),
+            Vec2::new(6.75, 48.0),
+            Vec3::new(0.0, -0.06, -30.0),
             true,
         ),
         plane_mesh(
             "left_concrete_walk",
-            1.5,
-            36.0,
+            2.8,
+            96.0,
             1,
-            Vec2::new(1.5, 18.0),
-            Vec3::new(-4.25, 0.0, -7.5),
+            Vec2::new(2.8, 48.0),
+            Vec3::new(-8.15, 0.0, -30.0),
             true,
         ),
         plane_mesh(
             "right_concrete_walk",
-            1.5,
-            36.0,
+            2.8,
+            96.0,
             1,
-            Vec2::new(1.5, 18.0),
-            Vec3::new(4.25, 0.0, -7.5),
+            Vec2::new(2.8, 48.0),
+            Vec3::new(8.15, 0.0, -30.0),
             true,
         ),
         wall_mesh(
@@ -792,11 +880,11 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         ),
         wall_mesh(
             "alley_end_brick",
-            10.0,
-            7.0,
+            36.0,
+            18.0,
             2,
-            Vec2::new(5.0, 3.5),
-            Mat4::translation(Vec3::new(0.0, 3.5, -25.45)),
+            Vec2::new(12.0, 6.0),
+            Mat4::translation(Vec3::new(0.0, 8.6, -78.5)),
         ),
         wall_mesh(
             "left_loading_shutter",
@@ -1101,92 +1189,102 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::rotation_y(-90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(4.46, 3.25, -12.9)),
         ),
-        detail_wall_mesh(
+        box_mesh(
             "left_generated_cyan_transit_panel",
-            3.85,
-            2.28,
+            Vec3::new(3.85, 2.28, 0.16),
             cyan_generated_panel_material,
             Vec2::new(1.0, 1.0),
             Mat4::rotation_y(90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-4.47, 2.85, -16.55)),
+            false,
+            false,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "right_generated_amber_hazard_placard",
-            2.75,
-            1.84,
+            Vec3::new(2.75, 1.84, 0.16),
             amber_generated_panel_material,
             Vec2::new(1.0, 1.0),
             Mat4::rotation_y(-90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(4.46, 2.35, -16.15)),
+            false,
+            false,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "deep_generated_cyan_transit_panel",
-            4.7,
-            2.82,
+            Vec3::new(4.7, 2.82, 0.16),
             cyan_generated_panel_material,
             Vec2::new(1.0, 1.0),
             Mat4::translation(Vec3::new(1.75, 3.0, -25.30)),
+            false,
+            false,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "deep_generated_amber_service_marker",
-            2.1,
-            1.34,
+            Vec3::new(2.1, 1.34, 0.16),
             amber_generated_panel_material,
             Vec2::new(1.0, 1.0),
             Mat4::translation(Vec3::new(-3.15, 2.25, -25.28)),
+            false,
+            false,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "left_wet_tarp_cable_net",
-            4.45,
-            3.35,
+            Vec3::new(4.45, 3.35, 0.18),
             wet_tarp_material,
             Vec2::new(1.0, 1.0),
             Mat4::rotation_y(90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-4.50, 2.35, -11.45)),
+            false,
+            false,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "center_hanging_tarp_cable_sheet",
-            3.55,
-            2.6,
+            Vec3::new(3.55, 2.6, 0.18),
             wet_tarp_material,
             Vec2::new(1.0, 1.0),
             Mat4::rotation_y(-8.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-0.78, 2.55, -18.10)),
+            false,
+            false,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "right_far_tarp_patch",
-            3.25,
-            2.45,
+            Vec3::new(3.25, 2.45, 0.18),
             wet_tarp_material,
             Vec2::new(1.0, 1.0),
             Mat4::rotation_y(-90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(4.50, 2.15, -20.45)),
+            false,
+            false,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "right_generated_corrugated_service_skin",
-            3.6,
-            4.9,
+            Vec3::new(3.6, 4.9, 0.20),
             wet_corrugated_metal_material,
             Vec2::new(1.0, 1.45),
             Mat4::rotation_y(-90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(4.42, 2.55, -14.35)),
+            false,
+            true,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "left_generated_corrugated_access_panel",
-            2.85,
-            3.95,
+            Vec3::new(2.85, 3.95, 0.20),
             wet_corrugated_metal_material,
             Vec2::new(0.85, 1.25),
             Mat4::rotation_y(90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-4.42, 2.12, -18.95)),
+            false,
+            true,
         ),
-        detail_wall_mesh(
+        box_mesh(
             "deep_generated_corrugated_rollup_door",
-            3.35,
-            4.25,
+            Vec3::new(3.35, 4.25, 0.20),
             wet_corrugated_metal_material,
             Vec2::new(1.0, 1.25),
             Mat4::translation(Vec3::new(-2.10, 2.20, -25.24)),
+            false,
+            true,
         ),
         detail_wall_mesh(
             "deep_overhead_service_bridge",
@@ -1299,6 +1397,226 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         ),
     ]);
 
+    scene.meshes.extend([
+        plane_mesh(
+            "city_cross_street_wet_asphalt",
+            38.0,
+            14.0,
+            0,
+            Vec2::new(19.0, 7.0),
+            Vec3::new(0.0, -0.055, -38.5),
+            true,
+        ),
+        plane_mesh(
+            "left_market_lane_wet_pavers",
+            12.0,
+            38.0,
+            1,
+            Vec2::new(6.0, 19.0),
+            Vec3::new(-14.2, -0.052, -45.5),
+            true,
+        ),
+        plane_mesh(
+            "right_bazaar_lane_wet_pavers",
+            12.0,
+            38.0,
+            1,
+            Vec2::new(6.0, 19.0),
+            Vec3::new(14.2, -0.052, -45.5),
+            true,
+        ),
+    ]);
+
+    append_city_shopfront_row(
+        &mut scene,
+        "left_city_shopfront_row_near",
+        CityShopfrontRow {
+            facing: FacadeFacing::Left,
+            face_base: Vec3::new(-11.8, 0.0, -33.8),
+            length: 10.5,
+            height: 7.8,
+            bays: 3,
+        },
+        CityShopfrontMaterials {
+            shell: oily_patched_concrete_material,
+            panel: city_shopfront_material,
+            awning: market_awning_material,
+            trim: rain_black_trim_material,
+            cool_light: 4,
+            warm_light: 5,
+        },
+    );
+    append_city_shopfront_row(
+        &mut scene,
+        "left_city_shopfront_row_far",
+        CityShopfrontRow {
+            facing: FacadeFacing::Left,
+            face_base: Vec3::new(-13.9, 0.0, -52.4),
+            length: 12.5,
+            height: 8.4,
+            bays: 4,
+        },
+        CityShopfrontMaterials {
+            shell: oily_patched_concrete_material,
+            panel: city_shopfront_material,
+            awning: market_awning_material,
+            trim: rain_black_trim_material,
+            cool_light: 4,
+            warm_light: 5,
+        },
+    );
+    append_city_shopfront_row(
+        &mut scene,
+        "right_city_shopfront_row_near",
+        CityShopfrontRow {
+            facing: FacadeFacing::Right,
+            face_base: Vec3::new(11.8, 0.0, -34.8),
+            length: 10.5,
+            height: 7.8,
+            bays: 3,
+        },
+        CityShopfrontMaterials {
+            shell: oily_patched_concrete_material,
+            panel: city_shopfront_material,
+            awning: market_awning_material,
+            trim: rain_black_trim_material,
+            cool_light: 4,
+            warm_light: 5,
+        },
+    );
+    append_city_shopfront_row(
+        &mut scene,
+        "right_city_shopfront_row_far",
+        CityShopfrontRow {
+            facing: FacadeFacing::Right,
+            face_base: Vec3::new(13.9, 0.0, -53.2),
+            length: 12.5,
+            height: 8.4,
+            bays: 4,
+        },
+        CityShopfrontMaterials {
+            shell: oily_patched_concrete_material,
+            panel: city_shopfront_material,
+            awning: market_awning_material,
+            trim: rain_black_trim_material,
+            cool_light: 4,
+            warm_light: 5,
+        },
+    );
+    append_city_shopfront_row(
+        &mut scene,
+        "cross_street_shopfront_back_left",
+        CityShopfrontRow {
+            facing: FacadeFacing::Back,
+            face_base: Vec3::new(-7.2, 0.0, -47.8),
+            length: 10.8,
+            height: 7.4,
+            bays: 3,
+        },
+        CityShopfrontMaterials {
+            shell: oily_patched_concrete_material,
+            panel: city_shopfront_material,
+            awning: market_awning_material,
+            trim: rain_black_trim_material,
+            cool_light: 4,
+            warm_light: 5,
+        },
+    );
+    append_city_shopfront_row(
+        &mut scene,
+        "cross_street_shopfront_back_right",
+        CityShopfrontRow {
+            facing: FacadeFacing::Back,
+            face_base: Vec3::new(7.2, 0.0, -49.8),
+            length: 10.8,
+            height: 7.4,
+            bays: 3,
+        },
+        CityShopfrontMaterials {
+            shell: oily_patched_concrete_material,
+            panel: city_shopfront_material,
+            awning: market_awning_material,
+            trim: rain_black_trim_material,
+            cool_light: 4,
+            warm_light: 5,
+        },
+    );
+    append_apartment_tower_cluster(
+        &mut scene,
+        "central_apartment_skyline",
+        city_skyline_material,
+        rain_black_trim_material,
+        1,
+        -67.5,
+    );
+    append_market_canopy(
+        &mut scene,
+        "left_market_overhead_tarp",
+        Vec3::new(-5.2, 4.55, -36.8),
+        Vec3::new(11.0, 0.26, 8.2),
+        market_awning_material,
+        rain_black_trim_material,
+    );
+    append_market_canopy(
+        &mut scene,
+        "center_bazaar_overhead_tarp",
+        Vec3::new(0.6, 4.85, -48.4),
+        Vec3::new(13.5, 0.28, 8.8),
+        market_awning_material,
+        rain_black_trim_material,
+    );
+    append_market_canopy(
+        &mut scene,
+        "right_market_overhead_tarp",
+        Vec3::new(5.2, 4.55, -40.6),
+        Vec3::new(11.0, 0.26, 8.2),
+        market_awning_material,
+        rain_black_trim_material,
+    );
+
+    scene.meshes.extend([
+        detail_wall_mesh(
+            "city_cross_street_cyan_sign",
+            5.2,
+            0.34,
+            4,
+            Vec2::new(1.0, 1.0),
+            Mat4::translation(Vec3::new(-8.2, 5.85, -47.35)),
+        ),
+        detail_wall_mesh(
+            "city_market_amber_sign",
+            4.6,
+            0.32,
+            5,
+            Vec2::new(1.0, 1.0),
+            Mat4::translation(Vec3::new(8.7, 5.25, -49.35)),
+        ),
+        puddle_mesh(
+            "city_cross_street_reflection_lake",
+            5.8,
+            7.8,
+            puddle_material,
+            Vec2::new(2.6, 3.2),
+            Vec3::new(0.35, -0.047, -36.4),
+        ),
+        puddle_mesh(
+            "left_market_lane_reflection_pool",
+            3.6,
+            7.0,
+            puddle_material,
+            Vec2::new(1.6, 3.0),
+            Vec3::new(-9.6, -0.047, -45.2),
+        ),
+        puddle_mesh(
+            "right_bazaar_lane_reflection_pool",
+            3.6,
+            7.0,
+            puddle_material,
+            Vec2::new(1.6, 3.0),
+            Vec3::new(9.6, -0.047, -46.8),
+        ),
+    ]);
+
     for name in [
         "left_aged_brick",
         "right_aged_brick",
@@ -1307,6 +1625,13 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         "right_loading_shutter",
         "left_recessed_service_bay",
         "far_scaffold_shadow",
+        "left_city_shopfront_row_near_shell",
+        "right_city_shopfront_row_near_shell",
+        "cross_street_shopfront_back_left_shell",
+        "cross_street_shopfront_back_right_shell",
+        "central_apartment_skyline_tower_0_shell",
+        "central_apartment_skyline_tower_2_shell",
+        "central_apartment_skyline_tower_4_shell",
     ] {
         mark_prepass(&mut scene, name);
     }
@@ -1321,6 +1646,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::rotation_y(-0.5) * Mat4::translation(Vec3::new(3.18, 0.02, -10.95)),
             Mat4::rotation_y(0.65) * Mat4::translation(Vec3::new(3.02, 0.02, -17.60)),
             Mat4::rotation_y(-0.20) * Mat4::translation(Vec3::new(-2.72, 0.02, -20.25)),
+            Mat4::rotation_y(0.48) * Mat4::translation(Vec3::new(-8.20, 0.02, -35.35)),
+            Mat4::rotation_y(-0.58) * Mat4::translation(Vec3::new(8.55, 0.02, -42.70)),
+            Mat4::rotation_y(0.28) * Mat4::translation(Vec3::new(-10.80, 0.02, -52.80)),
         ],
     )?;
     append_gltf_instances(
@@ -1333,6 +1661,10 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::translation(Vec3::new(-3.78, 0.02, -13.15)),
             Mat4::translation(Vec3::new(3.78, 0.02, -18.35)),
             Mat4::translation(Vec3::new(-3.86, 0.02, -23.20)),
+            Mat4::translation(Vec3::new(-8.85, 0.02, -33.60)),
+            Mat4::translation(Vec3::new(8.95, 0.02, -39.60)),
+            Mat4::translation(Vec3::new(-10.65, 0.02, -51.80)),
+            Mat4::translation(Vec3::new(10.80, 0.02, -58.20)),
         ],
     )?;
     append_gltf_instances(
@@ -1344,6 +1676,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::rotation_y(0.18) * Mat4::translation(Vec3::new(0.65, 0.0, -11.3)),
             Mat4::rotation_y(-0.38) * Mat4::translation(Vec3::new(-0.65, 0.0, -15.85)),
             Mat4::rotation_y(0.26) * Mat4::translation(Vec3::new(0.35, 0.0, -21.20)),
+            Mat4::rotation_y(0.92) * Mat4::translation(Vec3::new(-4.20, 0.0, -34.60)),
+            Mat4::rotation_y(-0.82) * Mat4::translation(Vec3::new(4.80, 0.0, -39.40)),
+            Mat4::rotation_y(0.14) * Mat4::translation(Vec3::new(1.35, 0.0, -52.80)),
         ],
     )?;
     append_gltf_instances(
@@ -1360,6 +1695,12 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::scale(Vec3::splat(0.1))
                 * Mat4::rotation_y(-90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(3.82, 0.02, -18.80)),
+            Mat4::scale(Vec3::splat(0.1))
+                * Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-8.95, 0.02, -38.20)),
+            Mat4::scale(Vec3::splat(0.1))
+                * Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(8.95, 0.02, -47.60)),
         ],
     )?;
     append_gltf_instances(
@@ -1375,6 +1716,12 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 * Mat4::translation(Vec3::new(4.10, 0.05, -20.95)),
             Mat4::rotation_y(90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-4.10, 0.05, -22.60)),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-9.40, 0.05, -35.20)),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(9.40, 0.05, -44.60)),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-11.80, 0.05, -56.20)),
         ],
     )?;
     append_gltf_instances(
@@ -1386,6 +1733,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::rotation_y(-0.35) * Mat4::translation(Vec3::new(3.32, 0.34, -12.85)),
             Mat4::rotation_y(0.90) * Mat4::translation(Vec3::new(2.92, 0.34, -18.95)),
             Mat4::rotation_y(-0.72) * Mat4::translation(Vec3::new(-3.05, 0.34, -23.45)),
+            Mat4::rotation_y(0.55) * Mat4::translation(Vec3::new(-7.85, 0.34, -37.75)),
+            Mat4::rotation_y(-0.88) * Mat4::translation(Vec3::new(8.15, 0.34, -50.65)),
         ],
     )?;
     append_gltf_instances(
@@ -1397,6 +1746,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::rotation_y(0.5) * Mat4::translation(Vec3::new(-3.28, 0.02, -14.05)),
             Mat4::rotation_y(-0.68) * Mat4::translation(Vec3::new(3.10, 0.02, -16.90)),
             Mat4::rotation_y(0.42) * Mat4::translation(Vec3::new(-3.18, 0.02, -21.80)),
+            Mat4::rotation_y(-0.35) * Mat4::translation(Vec3::new(8.35, 0.02, -35.70)),
+            Mat4::rotation_y(0.62) * Mat4::translation(Vec3::new(-8.10, 0.02, -46.25)),
+            Mat4::rotation_y(-0.48) * Mat4::translation(Vec3::new(10.25, 0.02, -54.40)),
         ],
     )?;
 
@@ -1770,6 +2122,433 @@ fn append_gltf_instances(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FacadeFacing {
+    Left,
+    Right,
+    Back,
+}
+
+impl FacadeFacing {
+    fn normal(self) -> Vec3 {
+        match self {
+            Self::Left => Vec3::X,
+            Self::Right => -Vec3::X,
+            Self::Back => Vec3::Z,
+        }
+    }
+
+    fn tangent(self) -> Vec3 {
+        match self {
+            Self::Left | Self::Right => Vec3::Z,
+            Self::Back => Vec3::X,
+        }
+    }
+
+    fn box_size(self, facade_width: f32, height: f32, depth: f32) -> Vec3 {
+        match self {
+            Self::Left | Self::Right => Vec3::new(depth, height, facade_width),
+            Self::Back => Vec3::new(facade_width, height, depth),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CityShopfrontMaterials {
+    shell: usize,
+    panel: usize,
+    awning: usize,
+    trim: usize,
+    cool_light: usize,
+    warm_light: usize,
+}
+
+#[derive(Clone, Copy)]
+struct CityShopfrontRow {
+    facing: FacadeFacing,
+    face_base: Vec3,
+    length: f32,
+    height: f32,
+    bays: usize,
+}
+
+fn append_city_shopfront_row(
+    scene: &mut RenderScene,
+    prefix: &str,
+    row: CityShopfrontRow,
+    materials: CityShopfrontMaterials,
+) {
+    let CityShopfrontRow {
+        facing,
+        face_base,
+        length,
+        height,
+        bays,
+    } = row;
+    let normal = facing.normal();
+    let tangent = facing.tangent();
+    let shell_depth = 0.72;
+    let shell_center = face_base + Vec3::Y * (height * 0.5) - normal * (shell_depth * 0.5);
+    scene.meshes.push(facade_box_mesh(
+        &format!("{prefix}_shell"),
+        FacadeBoxSpec {
+            facing,
+            facade_width: length,
+            height,
+            depth: shell_depth,
+            material_index: materials.shell,
+            uv_scale: Vec2::new(length * 0.55, height * 0.35),
+            center: shell_center,
+            prepass_eligible: true,
+            reflection_proxy: true,
+        },
+    ));
+
+    let bay_spacing = length / bays as f32;
+    let bay_width = bay_spacing * 0.68;
+    for bay in 0..bays {
+        let u = -length * 0.5 + bay_spacing * (bay as f32 + 0.5);
+        let light_material = if bay % 2 == 0 {
+            materials.cool_light
+        } else {
+            materials.warm_light
+        };
+
+        scene.meshes.push(facade_box_mesh(
+            &format!("{prefix}_recess_{}", bay),
+            FacadeBoxSpec {
+                facing,
+                facade_width: bay_width * 1.08,
+                height: 3.05,
+                depth: 0.22,
+                material_index: materials.trim,
+                uv_scale: Vec2::new(1.0, 1.0),
+                center: face_base + tangent * u + Vec3::Y * 1.72 + normal * 0.08,
+                prepass_eligible: false,
+                reflection_proxy: false,
+            },
+        ));
+        scene.meshes.push(facade_box_mesh(
+            &format!("{prefix}_shutter_{}", bay),
+            FacadeBoxSpec {
+                facing,
+                facade_width: bay_width,
+                height: 2.42,
+                depth: 0.28,
+                material_index: materials.panel,
+                uv_scale: Vec2::new(1.0, 1.0),
+                center: face_base + tangent * u + Vec3::Y * 1.60 + normal * 0.24,
+                prepass_eligible: false,
+                reflection_proxy: false,
+            },
+        ));
+        scene.meshes.push(facade_box_mesh(
+            &format!("{prefix}_upper_window_{}", bay),
+            FacadeBoxSpec {
+                facing,
+                facade_width: bay_width * 0.72,
+                height: 1.22,
+                depth: 0.18,
+                material_index: materials.panel,
+                uv_scale: Vec2::new(1.0, 1.0),
+                center: face_base + tangent * u + Vec3::Y * 5.20 + normal * 0.18,
+                prepass_eligible: false,
+                reflection_proxy: false,
+            },
+        ));
+        scene.meshes.push(facade_box_mesh(
+            &format!("{prefix}_projecting_awning_{}", bay),
+            FacadeBoxSpec {
+                facing,
+                facade_width: bay_width * 1.08,
+                height: 0.22,
+                depth: 1.25,
+                material_index: materials.awning,
+                uv_scale: Vec2::new(1.0, 1.0),
+                center: face_base + tangent * u + Vec3::Y * 3.22 + normal * 0.62,
+                prepass_eligible: false,
+                reflection_proxy: false,
+            },
+        ));
+        scene.meshes.push(facade_box_mesh(
+            &format!("{prefix}_neon_tube_{}", bay),
+            FacadeBoxSpec {
+                facing,
+                facade_width: bay_width * 0.74,
+                height: 0.10,
+                depth: 0.16,
+                material_index: light_material,
+                uv_scale: Vec2::new(1.0, 1.0),
+                center: face_base + tangent * u + Vec3::Y * 2.93 + normal * 0.73,
+                prepass_eligible: false,
+                reflection_proxy: false,
+            },
+        ));
+    }
+
+    for post in 0..=bays {
+        let u = -length * 0.5 + bay_spacing * post as f32;
+        scene.meshes.push(facade_box_mesh(
+            &format!("{prefix}_structural_post_{}", post),
+            FacadeBoxSpec {
+                facing,
+                facade_width: 0.14,
+                height: height * 0.92,
+                depth: 0.22,
+                material_index: materials.trim,
+                uv_scale: Vec2::new(1.0, 1.0),
+                center: face_base + tangent * u + Vec3::Y * (height * 0.46) + normal * 0.14,
+                prepass_eligible: false,
+                reflection_proxy: false,
+            },
+        ));
+    }
+}
+
+fn append_market_canopy(
+    scene: &mut RenderScene,
+    prefix: &str,
+    center: Vec3,
+    size: Vec3,
+    awning_material: usize,
+    trim_material: usize,
+) {
+    scene.meshes.push(box_mesh(
+        &format!("{prefix}_slab"),
+        size,
+        awning_material,
+        Vec2::new(1.0, 1.0),
+        Mat4::translation(center),
+        false,
+        false,
+    ));
+    let pole_y = center.y - 1.95;
+    for (index, (x, z)) in [
+        (-size.x * 0.44, -size.z * 0.42),
+        (size.x * 0.44, -size.z * 0.42),
+        (-size.x * 0.44, size.z * 0.42),
+        (size.x * 0.44, size.z * 0.42),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        scene.meshes.push(box_mesh(
+            &format!("{prefix}_pole_{}", index),
+            Vec3::new(0.13, 3.9, 0.13),
+            trim_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::translation(Vec3::new(center.x + x, pole_y, center.z + z)),
+            false,
+            false,
+        ));
+    }
+    scene.meshes.push(box_mesh(
+        &format!("{prefix}_front_gutter"),
+        Vec3::new(size.x * 0.96, 0.18, 0.18),
+        trim_material,
+        Vec2::new(1.0, 1.0),
+        Mat4::translation(Vec3::new(
+            center.x,
+            center.y - 0.10,
+            center.z + size.z * 0.52,
+        )),
+        false,
+        false,
+    ));
+}
+
+fn append_apartment_tower_cluster(
+    scene: &mut RenderScene,
+    prefix: &str,
+    skyline_material: usize,
+    trim_material: usize,
+    shell_material: usize,
+    base_z: f32,
+) {
+    let towers = [
+        (-11.5, 4.2, 12.0, 3.0, 0.0),
+        (-6.8, 5.2, 16.0, 3.6, -1.2),
+        (-1.2, 4.6, 13.5, 3.2, 0.8),
+        (4.2, 5.8, 17.5, 3.8, -0.6),
+        (10.4, 4.8, 14.5, 3.3, 0.6),
+    ];
+    for (index, (x, width, height, depth, z_offset)) in towers.into_iter().enumerate() {
+        let center = Vec3::new(x, height * 0.5, base_z + z_offset);
+        scene.meshes.push(box_mesh(
+            &format!("{prefix}_tower_{}_shell", index),
+            Vec3::new(width, height, depth),
+            shell_material,
+            Vec2::new(width * 0.4, height * 0.25),
+            Mat4::translation(center),
+            index % 2 == 0,
+            true,
+        ));
+        scene.meshes.push(facade_box_mesh(
+            &format!("{prefix}_tower_{}_window_grid", index),
+            FacadeBoxSpec {
+                facing: FacadeFacing::Back,
+                facade_width: width * 0.70,
+                height: height * 0.56,
+                depth: 0.14,
+                material_index: skyline_material,
+                uv_scale: Vec2::new(1.0, 1.0),
+                center: Vec3::new(x, height * 0.56, base_z + z_offset + depth * 0.5 + 0.08),
+                prepass_eligible: false,
+                reflection_proxy: false,
+            },
+        ));
+        scene.meshes.push(box_mesh(
+            &format!("{prefix}_tower_{}_roof_tank", index),
+            Vec3::new(width * 0.28, 0.55, depth * 0.26),
+            trim_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::translation(Vec3::new(
+                x - width * 0.22,
+                height + 0.35,
+                base_z + z_offset,
+            )),
+            false,
+            false,
+        ));
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FacadeBoxSpec {
+    facing: FacadeFacing,
+    facade_width: f32,
+    height: f32,
+    depth: f32,
+    material_index: usize,
+    uv_scale: Vec2,
+    center: Vec3,
+    prepass_eligible: bool,
+    reflection_proxy: bool,
+}
+
+fn facade_box_mesh(name: &str, spec: FacadeBoxSpec) -> Mesh {
+    box_mesh(
+        name,
+        spec.facing
+            .box_size(spec.facade_width, spec.height, spec.depth),
+        spec.material_index,
+        spec.uv_scale,
+        Mat4::translation(spec.center),
+        spec.prepass_eligible,
+        spec.reflection_proxy,
+    )
+}
+
+fn box_mesh(
+    name: &str,
+    size: Vec3,
+    material_index: usize,
+    uv_scale: Vec2,
+    transform: Mat4,
+    prepass_eligible: bool,
+    reflection_proxy: bool,
+) -> Mesh {
+    let hx = size.x * 0.5;
+    let hy = size.y * 0.5;
+    let hz = size.z * 0.5;
+    let mut vertices = Vec::with_capacity(24);
+    let mut indices = Vec::with_capacity(12);
+    let mut push_face = |corners: [Vec3; 4], normal: Vec3, tangent: Vec3| {
+        let base = vertices.len() as u32;
+        let uvs = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(uv_scale.x, 0.0),
+            uv_scale,
+            Vec2::new(0.0, uv_scale.y),
+        ];
+        for (position, uv) in corners.into_iter().zip(uvs) {
+            vertices.push(Vertex {
+                position,
+                normal,
+                tangent,
+                tangent_sign: 1.0,
+                uv,
+                color: Color::WHITE,
+            });
+        }
+        indices.push([base, base + 1, base + 2]);
+        indices.push([base, base + 2, base + 3]);
+    };
+
+    push_face(
+        [
+            Vec3::new(-hx, -hy, hz),
+            Vec3::new(hx, -hy, hz),
+            Vec3::new(hx, hy, hz),
+            Vec3::new(-hx, hy, hz),
+        ],
+        Vec3::Z,
+        Vec3::X,
+    );
+    push_face(
+        [
+            Vec3::new(hx, -hy, -hz),
+            Vec3::new(-hx, -hy, -hz),
+            Vec3::new(-hx, hy, -hz),
+            Vec3::new(hx, hy, -hz),
+        ],
+        -Vec3::Z,
+        -Vec3::X,
+    );
+    push_face(
+        [
+            Vec3::new(hx, -hy, hz),
+            Vec3::new(hx, -hy, -hz),
+            Vec3::new(hx, hy, -hz),
+            Vec3::new(hx, hy, hz),
+        ],
+        Vec3::X,
+        -Vec3::Z,
+    );
+    push_face(
+        [
+            Vec3::new(-hx, -hy, -hz),
+            Vec3::new(-hx, -hy, hz),
+            Vec3::new(-hx, hy, hz),
+            Vec3::new(-hx, hy, -hz),
+        ],
+        -Vec3::X,
+        Vec3::Z,
+    );
+    push_face(
+        [
+            Vec3::new(-hx, hy, hz),
+            Vec3::new(hx, hy, hz),
+            Vec3::new(hx, hy, -hz),
+            Vec3::new(-hx, hy, -hz),
+        ],
+        Vec3::Y,
+        Vec3::X,
+    );
+    push_face(
+        [
+            Vec3::new(-hx, -hy, -hz),
+            Vec3::new(hx, -hy, -hz),
+            Vec3::new(hx, -hy, hz),
+            Vec3::new(-hx, -hy, hz),
+        ],
+        -Vec3::Y,
+        Vec3::X,
+    );
+
+    Mesh {
+        name: name.to_string(),
+        vertices,
+        indices,
+        material_index,
+        transform,
+        shadow_class: ShadowCasterClass::Main,
+        is_floor_or_ground: false,
+        prepass_eligible,
+        reflection_proxy,
+    }
 }
 
 fn quad_vertices(size: f32, normal: Vec3, y: f32, color: Color) -> Vec<Vertex> {

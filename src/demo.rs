@@ -92,7 +92,7 @@ pub fn export_demo_gallery(
 
     let triangles = scene.meshes.iter().map(|mesh| mesh.indices.len()).sum();
     let html = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Dhool Pro Showcase</title><style>{}</style></head><body><header><p class=\"eyebrow\">LIVE-SCENE DIAGNOSTICS</p><h1>Dhool Pro renderer showcase</h1><p>Vendor-agnostic CPU reference path · {} meshes · {} triangles · {} materials</p></header><main>{cards}</main><footer>Default gallery scene: assets/aaa, matching the live GPU alley geometry and materials. Pass --asset path/to/model.gltf for the deterministic glTF showcase.</footer></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Dhool Pro Showcase</title><style>{}</style></head><body><header><p class=\"eyebrow\">LIVE-SCENE DIAGNOSTICS</p><h1>Dhool Pro renderer showcase</h1><p>Vendor-agnostic CPU reference path · {} meshes · {} triangles · {} materials</p></header><main>{cards}</main><footer>Default gallery scene: assets/aaa, matching the live GPU monsoon city geometry and materials. Pass --asset path/to/model.gltf for the deterministic glTF showcase.</footer></body></html>",
         STYLE,
         scene.meshes.len(),
         triangles,

@@ -1361,7 +1361,7 @@ fn trace_alley_proxy(scene: &RenderScene, origin: Vec3, ray: Vec3) -> Color {
     if ray.y.abs() > 0.0001 {
         let t = (-0.06 - origin.y) / ray.y;
         let p = origin + ray * t;
-        if t > 0.04 && t < best_t && p.x.abs() < 3.65 && p.z > -18.6 && p.z < 8.5 {
+        if t > 0.04 && t < best_t && p.x.abs() < 18.5 && p.z > -82.0 && p.z < 14.0 {
             best_t = t;
             best_radiance =
                 proxy_direct_radiance(scene, p, Vec3::Y, Vec3::new(0.045, 0.052, 0.055));
@@ -1369,28 +1369,28 @@ fn trace_alley_proxy(scene: &RenderScene, origin: Vec3, ray: Vec3) -> Color {
     }
 
     if ray.x.abs() > 0.0001 {
-        let left_t = (-5.0 - origin.x) / ray.x;
+        let left_t = (-12.5 - origin.x) / ray.x;
         let left_p = origin + ray * left_t;
         if left_t > 0.04
             && left_t < best_t
             && left_p.y > 0.0
-            && left_p.y < 7.0
-            && left_p.z > -18.6
-            && left_p.z < 8.5
+            && left_p.y < 16.0
+            && left_p.z > -82.0
+            && left_p.z < 14.0
         {
             best_t = left_t;
             best_radiance =
                 proxy_direct_radiance(scene, left_p, Vec3::X, Vec3::new(0.18, 0.125, 0.10));
         }
 
-        let right_t = (5.0 - origin.x) / ray.x;
+        let right_t = (12.5 - origin.x) / ray.x;
         let right_p = origin + ray * right_t;
         if right_t > 0.04
             && right_t < best_t
             && right_p.y > 0.0
-            && right_p.y < 7.0
-            && right_p.z > -18.6
-            && right_p.z < 8.5
+            && right_p.y < 16.0
+            && right_p.z > -82.0
+            && right_p.z < 14.0
         {
             best_t = right_t;
             best_radiance =
@@ -1399,9 +1399,10 @@ fn trace_alley_proxy(scene: &RenderScene, origin: Vec3, ray: Vec3) -> Color {
     }
 
     if ray.z.abs() > 0.0001 {
-        let end_t = (-18.45 - origin.z) / ray.z;
+        let end_t = (-78.5 - origin.z) / ray.z;
         let end_p = origin + ray * end_t;
-        if end_t > 0.04 && end_t < best_t && end_p.x.abs() < 5.1 && end_p.y > 0.0 && end_p.y < 7.0 {
+        if end_t > 0.04 && end_t < best_t && end_p.x.abs() < 18.5 && end_p.y > 0.0 && end_p.y < 18.0
+        {
             best_t = end_t;
             best_radiance =
                 proxy_direct_radiance(scene, end_p, Vec3::Z, Vec3::new(0.17, 0.12, 0.10));

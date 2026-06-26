@@ -35,8 +35,8 @@ struct LocalShadowCameras {
 @group(0) @binding(11) var<uniform> local_shadow_cameras: LocalShadowCameras;
 const RAIN_GRID_X: u32 = 64u;
 const RAIN_GRID_Z: u32 = 64u;
-const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-7.2, 0.14, -21.0);
-const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(14.4, 9.6, 29.5);
+const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-18.5, 0.14, -82.0);
+const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(37.0, 13.5, 100.0);
 const EMISSIVE_SCALE: f32 = 12.0;
 const PRACTICAL_SPOT_MIN_FILL: f32 = 0.26;
 const PRACTICAL_SPOT_MIN_SHADOW: f32 = 0.24;

@@ -151,6 +151,9 @@ fn aaa_scene_uses_generated_decal_assets_and_deeper_set_dressing() {
         "assets/aaa/generated/cyan_transit_panel.png",
         "assets/aaa/generated/amber_hazard_placard.png",
         "assets/aaa/generated/wet_tarp_cable_net.png",
+        "assets/aaa/generated/city_shopfront_facade.png",
+        "assets/aaa/generated/city_apartment_skyline.png",
+        "assets/aaa/generated/monsoon_market_awning.png",
     ] {
         assert!(std::path::Path::new(path).is_file(), "{path} should exist");
     }
@@ -159,6 +162,9 @@ fn aaa_scene_uses_generated_decal_assets_and_deeper_set_dressing() {
         "generated_cyan_transit_panel",
         "generated_amber_hazard_placard",
         "generated_wet_tarp_cable_net",
+        "generated_city_shopfront_facade",
+        "generated_city_apartment_skyline",
+        "generated_monsoon_market_awning",
     ] {
         let material = scene
             .materials
@@ -177,14 +183,70 @@ fn aaa_scene_uses_generated_decal_assets_and_deeper_set_dressing() {
         "center_hanging_tarp_cable_sheet",
         "deep_overhead_service_bridge",
         "deep_cyan_panel_reflection_pool",
+        "left_city_shopfront_row_near_shell",
+        "left_city_shopfront_row_near_projecting_awning_0",
+        "left_city_shopfront_row_near_structural_post_1",
+        "right_city_shopfront_row_near_shell",
+        "right_city_shopfront_row_near_shutter_2",
+        "city_cross_street_wet_asphalt",
+        "left_market_lane_wet_pavers",
+        "right_bazaar_lane_wet_pavers",
+        "central_apartment_skyline_tower_0_shell",
+        "central_apartment_skyline_tower_2_window_grid",
+        "central_apartment_skyline_tower_4_roof_tank",
+        "center_bazaar_overhead_tarp_slab",
+        "center_bazaar_overhead_tarp_pole_2",
+        "city_cross_street_reflection_lake",
     ] {
         assert!(
             scene.meshes.iter().any(|mesh| mesh.name == mesh_name),
-            "{mesh_name} should be in the expanded alley scene"
+            "{mesh_name} should be in the expanded city scene"
         );
     }
 
-    assert!(scene.meshes.len() >= 60);
+    for removed_billboard in [
+        "left_city_shopfront_row_near",
+        "right_city_shopfront_row_near",
+        "far_left_apartment_skyline_wall",
+        "far_right_apartment_skyline_wall",
+        "central_apartment_skyline_tower_wall",
+        "left_monsoon_market_awning_wall",
+        "right_monsoon_market_awning_wall",
+        "far_monsoon_market_awning_gate",
+    ] {
+        assert!(
+            !scene
+                .meshes
+                .iter()
+                .any(|mesh| mesh.name == removed_billboard),
+            "{removed_billboard} should not remain as a flat billboard"
+        );
+    }
+
+    let city_generated_materials: Vec<_> = [
+        "generated_city_shopfront_facade",
+        "generated_city_apartment_skyline",
+        "generated_monsoon_market_awning",
+    ]
+    .into_iter()
+    .map(|name| {
+        scene
+            .materials
+            .iter()
+            .position(|material| material.name == name)
+            .expect("city generated material")
+    })
+    .collect();
+    assert!(scene
+        .meshes
+        .iter()
+        .filter(|mesh| city_generated_materials.contains(&mesh.material_index))
+        .all(|mesh| mesh.vertices.len() > 4));
+
+    assert!(scene.meshes.len() >= 90);
+    assert!(scene.camera.far >= 160.0);
+    assert!(scene.camera.position.z < -28.0);
+    assert!(scene.camera.target.z < -58.0);
     assert!(scene
         .lights
         .iter()
@@ -193,6 +255,14 @@ fn aaa_scene_uses_generated_decal_assets_and_deeper_set_dressing() {
         .lights
         .iter()
         .any(|light| light.name == "deep_amber_service_fill"));
+    assert!(scene
+        .lights
+        .iter()
+        .any(|light| light.name == "city_cross_street_cyan"));
+    assert!(scene
+        .lights
+        .iter()
+        .any(|light| light.name == "market_lane_amber"));
 }
 
 #[test]
@@ -454,5 +524,5 @@ fn gallery_default_points_at_live_aaa_scene() {
 
     assert!(main.contains(".unwrap_or(\"assets/aaa\")"));
     assert!(demo.contains("build_aaa_scene(asset_path)"));
-    assert!(readme.contains("same `assets/aaa` industrial alley scene used by `--live`"));
+    assert!(readme.contains("same `assets/aaa` monsoon city scene used by `--live`"));
 }

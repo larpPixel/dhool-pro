@@ -11,10 +11,12 @@ vendor SDK.
 cargo run --release -- --live
 ```
 
-The default scene is a rain-soaked industrial alley assembled from vendored Poly
-Haven CC0 models and PBR surfaces. Press `Space` to pause or resume the cinematic
-camera, hold `W`/`A`/`S`/`D` to move, use the arrow keys to look around, and press
-`Escape` to exit. Select a present-capable adapter by name when testing multiple GPUs:
+The default scene is a rain-soaked monsoon city scene assembled from vendored Poly
+Haven CC0 models, PBR surfaces, and project-local generated facade/market textures.
+The foreground alley opens into a wider cross-street, market lane, and distant
+apartment skyline. Press `Space` to pause or resume the cinematic camera, hold
+`W`/`A`/`S`/`D` to move, use the arrow keys to look around, and press `Escape` to
+exit. Select a present-capable adapter by name when testing multiple GPUs:
 
 ```sh
 DHOOL_GPU=AMD cargo run --release -- --live
@@ -31,7 +33,7 @@ Kawase bloom, GT tone mapping, and a final SMAA T2x-style edge/persistence
 resolve. Materials use mipmapped base-color, tangent-space normal, and packed
 AO/roughness/metallic maps.
 
-![Rainy industrial live GPU scene](demo-output/aaa-live.png)
+![Rainy monsoon city live GPU scene](demo-output/aaa-live.png)
 
 The asset bundle is checked in for deterministic offline runs. Refresh the
 vendored upstream assets from the recorded manifest with:
@@ -54,7 +56,7 @@ python3 -m http.server 8080 -d demo-output
 ```
 
 Open `http://localhost:8080`. By default the gallery exports diagnostics for
-the same `assets/aaa` industrial alley scene used by `--live`: the beauty frame,
+the same `assets/aaa` monsoon city scene used by `--live`: the beauty frame,
 all 16 production debug views, and `timings.txt` with per-pass CPU measurements
 and warnings.
 

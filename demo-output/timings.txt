@@ -1,23 +1,24 @@
 [beauty]
-  frame-start-clears                            1.948 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.148 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.750 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.630 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.162 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.734 ms (budget  0.80 ms)
-  screen-space-reflections                      0.199 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.863 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.590 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.339 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.972 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.342 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.040 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.830 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.996 ms (budget  0.50 ms)
+  base-pass-deferred-materials                181.416 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.555 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.594 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.626 ms (budget  0.80 ms)
+  screen-space-reflections                      0.417 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.274 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.408 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.043 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.509 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.384 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.048 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -30,27 +31,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [depth]
-  frame-start-clears                            2.126 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.136 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.545 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.630 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.331 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.738 ms (budget  0.80 ms)
-  screen-space-reflections                      0.167 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.581 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.117 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.301 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   3.804 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.248 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            2.890 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.987 ms (budget  0.50 ms)
+  base-pass-deferred-materials                176.183 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.559 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.538 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.610 ms (budget  0.80 ms)
+  screen-space-reflections                      0.395 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.368 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.342 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.059 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   6.083 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.376 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.047 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -63,27 +71,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [normals]
-  frame-start-clears                            3.785 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.144 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.513 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.658 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          3.034 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                1.310 ms (budget  0.80 ms)
-  screen-space-reflections                      0.197 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.531 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.114 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.297 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.000 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.237 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.712 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.993 ms (budget  0.50 ms)
+  base-pass-deferred-materials                183.052 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.636 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.787 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.733 ms (budget  0.80 ms)
+  screen-space-reflections                      0.458 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.850 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.984 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.076 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.598 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.377 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.047 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -96,27 +111,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [roughness]
-  frame-start-clears                            2.169 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.208 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.640 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.630 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.437 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.805 ms (budget  0.80 ms)
-  screen-space-reflections                      0.186 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.905 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.528 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.293 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.045 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.236 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.043 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.795 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.994 ms (budget  0.50 ms)
+  base-pass-deferred-materials                177.046 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.549 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.475 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.596 ms (budget  0.80 ms)
+  screen-space-reflections                      0.407 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.252 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.379 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.060 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.529 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.370 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.046 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -129,27 +151,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [material-id]
-  frame-start-clears                            2.024 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.145 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.102 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.626 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.182 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.749 ms (budget  0.80 ms)
-  screen-space-reflections                      0.227 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.599 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.121 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.307 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.960 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.237 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.711 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.988 ms (budget  0.50 ms)
+  base-pass-deferred-materials                178.489 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.542 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.554 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.687 ms (budget  0.80 ms)
+  screen-space-reflections                      0.450 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.521 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                21.562 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.105 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.737 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.457 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.055 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -162,27 +191,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [shadow-mask]
-  frame-start-clears                            2.019 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.142 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.647 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.620 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.209 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.720 ms (budget  0.80 ms)
-  screen-space-reflections                      0.173 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.564 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.077 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.309 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   3.762 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.245 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.036 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.937 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.029 ms (budget  0.50 ms)
+  base-pass-deferred-materials                185.975 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.547 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          2.047 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.645 ms (budget  0.80 ms)
+  screen-space-reflections                      0.511 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.689 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                22.009 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.262 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.691 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.367 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.068 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -195,27 +231,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [ambient-occlusion]
-  frame-start-clears                            3.933 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.194 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 93.940 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.688 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          3.106 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                1.195 ms (budget  0.80 ms)
-  screen-space-reflections                      0.271 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.600 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.155 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.300 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.029 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.243 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            2.052 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.062 ms (budget  0.50 ms)
+  base-pass-deferred-materials                178.755 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.560 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.847 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.625 ms (budget  0.80 ms)
+  screen-space-reflections                      0.460 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.490 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.513 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.062 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.607 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.392 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.049 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -228,27 +271,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [motion-vectors]
-  frame-start-clears                            2.330 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.148 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.887 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.625 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.205 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.703 ms (budget  0.80 ms)
-  screen-space-reflections                      0.150 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.697 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.787 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.308 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.050 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.252 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.696 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.998 ms (budget  0.50 ms)
+  base-pass-deferred-materials                179.456 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.544 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.575 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.607 ms (budget  0.80 ms)
+  screen-space-reflections                      0.429 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            14.316 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.327 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.060 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.544 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.385 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.050 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -261,27 +311,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [reflections]
-  frame-start-clears                            2.026 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.137 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 93.708 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.632 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.286 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.724 ms (budget  0.80 ms)
-  screen-space-reflections                      0.161 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.721 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.319 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.322 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.168 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.340 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.039 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.521 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.978 ms (budget  0.50 ms)
+  base-pass-deferred-materials                186.392 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.636 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.617 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.977 ms (budget  0.80 ms)
+  screen-space-reflections                      0.449 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            15.283 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                21.714 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.261 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.794 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.454 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.053 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -294,27 +351,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [edge-stencil]
-  frame-start-clears                            2.136 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.147 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.675 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.626 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.275 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.726 ms (budget  0.80 ms)
-  screen-space-reflections                      0.203 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.676 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.175 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.299 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   3.824 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.241 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.036 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.620 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.067 ms (budget  0.50 ms)
+  base-pass-deferred-materials                195.013 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.699 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          3.329 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.997 ms (budget  0.80 ms)
+  screen-space-reflections                      0.680 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            15.573 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.960 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.084 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.951 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.472 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.061 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -327,27 +391,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [overdraw]
-  frame-start-clears                            3.464 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.150 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 95.499 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.647 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          2.068 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                1.129 ms (budget  0.80 ms)
-  screen-space-reflections                      0.180 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.648 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.176 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.302 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   3.740 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.241 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.036 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.918 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.014 ms (budget  0.50 ms)
+  base-pass-deferred-materials                192.134 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.657 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          2.497 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.838 ms (budget  0.80 ms)
+  screen-space-reflections                      0.667 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            15.209 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                20.744 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     1.106 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   2.712 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.445 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.062 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -360,27 +431,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [texture-count]
-  frame-start-clears                            2.100 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.151 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.767 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.633 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.253 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.777 ms (budget  0.80 ms)
-  screen-space-reflections                      0.238 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.588 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.420 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.298 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.194 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.264 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            2.169 ms (budget  0.10 ms)
+  partial-depth-prepass                         1.053 ms (budget  0.50 ms)
+  base-pass-deferred-materials                171.490 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.402 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          2.596 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.794 ms (budget  0.80 ms)
+  screen-space-reflections                      0.516 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            10.932 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                16.278 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.735 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.577 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.305 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.059 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -393,27 +471,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [bent-normal-occlusion]
-  frame-start-clears                            2.150 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.148 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 93.929 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.630 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.208 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.689 ms (budget  0.80 ms)
-  screen-space-reflections                      0.149 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.610 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.169 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.306 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.314 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.257 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.530 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.762 ms (budget  0.50 ms)
+  base-pass-deferred-materials                137.959 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.384 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          2.097 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.236 ms (budget  0.80 ms)
+  screen-space-reflections                      0.443 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            10.209 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                15.684 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.753 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.149 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.259 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.033 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -426,27 +511,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [quad-utilization]
-  frame-start-clears                            2.438 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.192 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 93.921 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.640 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          2.002 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                1.600 ms (budget  0.80 ms)
-  screen-space-reflections                      0.261 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.883 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.529 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.299 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   3.798 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.242 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            2.127 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.849 ms (budget  0.50 ms)
+  base-pass-deferred-materials                137.404 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.358 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.426 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.693 ms (budget  0.80 ms)
+  screen-space-reflections                      0.317 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            10.232 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                17.293 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.738 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.437 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.241 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.031 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -459,27 +551,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [shadow-casters]
-  frame-start-clears                            3.333 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.177 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.000 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.661 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          3.269 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                1.392 ms (budget  0.80 ms)
-  screen-space-reflections                      0.489 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.601 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.182 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.307 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   4.081 ms (budget  1.00 ms)
+  frame-start-clears                            1.562 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.746 ms (budget  0.50 ms)
+  base-pass-deferred-materials                137.693 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.369 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.675 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.873 ms (budget  0.80 ms)
+  screen-space-reflections                      0.388 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            10.662 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                16.543 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.643 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.085 ms (budget  1.00 ms)
   smaa-compute-edge-detect                      0.239 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  smaa-persistence-resolve                      0.031 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -492,27 +591,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [light-volumes]
-  frame-start-clears                            2.292 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.156 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 94.395 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.633 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.270 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.712 ms (budget  0.80 ms)
-  screen-space-reflections                      0.143 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.685 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.908 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.299 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   3.769 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.262 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            2.142 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.825 ms (budget  0.50 ms)
+  base-pass-deferred-materials                137.265 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.361 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.392 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                2.013 ms (budget  0.80 ms)
+  screen-space-reflections                      0.976 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            10.055 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                16.039 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.634 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   1.213 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.235 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.031 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -525,27 +631,34 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 
 [history-validity]
-  frame-start-clears                            2.049 ms (budget  0.10 ms)
-  partial-depth-prepass                         0.131 ms (budget  0.50 ms)
-  base-pass-deferred-materials                 93.793 ms (budget  3.00 ms)
-  depth-copy-and-hiz                            0.436 ms (budget  0.30 ms)
-  stencil-restricted-shadow-projection          1.767 ms (budget  1.00 ms)
-  multi-scale-ao-contact-shadows                0.747 ms (budget  0.80 ms)
-  screen-space-reflections                      0.148 ms (budget  0.70 ms)
-  software-rt-reflection-supplement             4.510 ms (budget  1.30 ms)
-  albedo-free-deferred-lighting                 6.137 ms (budget  1.50 ms)
-  blue-noise-volumetric-fog                     0.305 ms (budget  1.00 ms)
-  kawase-bloom-and-gt-tonemap                   2.773 ms (budget  1.00 ms)
-  smaa-compute-edge-detect                      0.236 ms (budget  0.50 ms)
-  smaa-persistence-resolve                      0.037 ms (budget  0.50 ms)
-  warnings: 17
+  frame-start-clears                            1.574 ms (budget  0.10 ms)
+  partial-depth-prepass                         0.744 ms (budget  0.50 ms)
+  base-pass-deferred-materials                134.792 ms (budget  3.00 ms)
+  depth-copy-and-hiz                            0.348 ms (budget  0.30 ms)
+  stencil-restricted-shadow-projection          1.388 ms (budget  1.00 ms)
+  multi-scale-ao-contact-shadows                1.721 ms (budget  0.80 ms)
+  screen-space-reflections                      0.345 ms (budget  0.70 ms)
+  software-rt-reflection-supplement            10.476 ms (budget  1.30 ms)
+  albedo-free-deferred-lighting                15.977 ms (budget  1.50 ms)
+  blue-noise-volumetric-fog                     0.680 ms (budget  1.00 ms)
+  kawase-bloom-and-gt-tonemap                   2.453 ms (budget  1.00 ms)
+  smaa-compute-edge-detect                      0.249 ms (budget  0.50 ms)
+  smaa-persistence-resolve                      0.035 ms (budget  0.50 ms)
+  warnings: 24
     Asset(MissingBentNormals { material: "cyan_transit_neon" })
     Asset(MissingBentNormals { material: "amber_service_neon" })
     Asset(MissingBentNormals { material: "charcoal_fixture_metal" })
     Asset(MissingBentNormals { material: "aged_brass_edge_trim" })
     Asset(MissingBentNormals { material: "foreground_clear_puddle" })
+    Asset(MissingBentNormals { material: "rain_black_object_trim" })
     ShadowFloorExcluded { mesh: "rain_darkened_asphalt" }
     ShadowFloorExcluded { mesh: "left_concrete_walk" }
     ShadowFloorExcluded { mesh: "right_concrete_walk" }
@@ -558,4 +671,10 @@
     ShadowFloorExcluded { mesh: "right_amber_service_reflection_slick" }
     ShadowFloorExcluded { mesh: "deep_cyan_panel_reflection_pool" }
     ShadowFloorExcluded { mesh: "far_service_gate_rain_pool" }
+    ShadowFloorExcluded { mesh: "city_cross_street_wet_asphalt" }
+    ShadowFloorExcluded { mesh: "left_market_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_wet_pavers" }
+    ShadowFloorExcluded { mesh: "city_cross_street_reflection_lake" }
+    ShadowFloorExcluded { mesh: "left_market_lane_reflection_pool" }
+    ShadowFloorExcluded { mesh: "right_bazaar_lane_reflection_pool" }
 

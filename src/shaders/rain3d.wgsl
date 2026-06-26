@@ -26,8 +26,8 @@ struct Lights {
 @group(0) @binding(6) var<uniform> lights: Lights;
 const RAIN_GRID_X: u32 = 64u;
 const RAIN_GRID_Z: u32 = 64u;
-const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-7.2, 0.14, -21.0);
-const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(14.4, 9.6, 29.5);
+const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-18.5, 0.14, -82.0);
+const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(37.0, 13.5, 100.0);
 
 
 struct VertexOutput {
