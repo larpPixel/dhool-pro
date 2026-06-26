@@ -2,7 +2,8 @@ use dhool_pro::perf::{gt_tonemap_rgba8, kawase_blur_rgba32f};
 use dhool_pro::renderer::RenderWarning;
 use dhool_pro::scene::LightKind;
 use dhool_pro::{
-    build_aaa_scene, build_asset_showcase, build_demo_scene, CpuRenderer, DebugView, RenderConfig,
+    build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene, CpuRenderer,
+    DebugView, RenderConfig,
 };
 
 #[test]
@@ -263,6 +264,64 @@ fn aaa_scene_uses_generated_decal_assets_and_deeper_set_dressing() {
         .lights
         .iter()
         .any(|light| light.name == "market_lane_amber"));
+}
+
+#[test]
+fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
+    let exported_world =
+        std::path::Path::new("assets/dust2/generated/cs2/maps/de_dust2/world_physics_physics.glb");
+    assert!(
+        exported_world.is_file(),
+        "run scripts/import_cs2_dust2.sh before testing the CS2 Dust2 map"
+    );
+
+    let scene = build_dust2_scene("assets/dust2").expect("CS2 Dust2 scene");
+    let triangles: usize = scene.meshes.iter().map(|mesh| mesh.indices.len()).sum();
+    let vertices: usize = scene.meshes.iter().map(|mesh| mesh.vertices.len()).sum();
+
+    assert!(scene
+        .meshes
+        .iter()
+        .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_concrete")));
+    assert!(scene
+        .meshes
+        .iter()
+        .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_metal")));
+    assert!(scene
+        .meshes
+        .iter()
+        .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_wood")));
+    assert!(scene
+        .materials
+        .iter()
+        .any(|material| material.name == "cs2_dust2_concrete_plaster"));
+    assert!(scene
+        .materials
+        .iter()
+        .any(|material| material.name == "cs2_dust2_glass"));
+
+    assert!(scene.meshes.len() >= 30);
+    assert!(triangles >= 400_000);
+    assert!(vertices >= 1_000_000);
+    assert!(scene.camera.far >= 600.0);
+    assert!((1.0..=3.0).contains(&scene.camera.position.y));
+    assert!(scene.camera.position.z < -30.0);
+    assert!(!scene
+        .meshes
+        .iter()
+        .any(|mesh| mesh.name == "t_spawn_plaza_floor"));
+}
+
+#[test]
+fn live_gpu_uses_scene_camera_fov_and_clip_distance() {
+    let gpu = include_str!("../src/gpu.rs");
+
+    assert!(gpu.contains("camera_fov_y: f32"));
+    assert!(gpu.contains("camera_far: f32"));
+    assert!(gpu.contains("let camera_far = scene.camera.far"));
+    assert!(gpu.contains(
+        "let projection = Mat4::perspective_rh(\n            self.camera_fov_y,\n            self.config.width as f32 / self.config.height as f32,\n            self.camera_near,\n            self.camera_far,\n        );"
+    ));
 }
 
 #[test]

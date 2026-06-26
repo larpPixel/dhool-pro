@@ -1,6 +1,7 @@
 use crate::math::{Vec3, Vec4};
 use crate::scene::{
-    build_aaa_scene, build_asset_showcase, LightKind, Material, RenderScene, TextureImage,
+    build_aaa_scene, build_asset_showcase, build_dust2_scene, LightKind, Material, RenderScene,
+    TextureImage,
 };
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3 as GpuVec3};
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use wgpu::util::{DeviceExt, TextureDataOrder};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -29,8 +30,10 @@ const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const HIZ_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const VOLUMETRIC_FOG_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const CAMERA_MOVE_SPEED: f32 = 4.0;
+const CAMERA_MOVE_SPEED: f32 = 8.0;
+const CAMERA_FAST_MULTIPLIER: f32 = 3.5;
 const CAMERA_LOOK_SPEED: f32 = 1.55;
+const CAMERA_MOUSE_LOOK_SPEED: f32 = 0.0025;
 const GENERATED_RAIN_STREAK_DETAIL: &str = "assets/aaa/rain/generated_streak_detail.png";
 const RAIN_DROP_COUNT: u32 = 4_096;
 const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
@@ -46,6 +49,7 @@ const SSR_SCALE: u32 = 2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveOptions {
     pub asset: PathBuf,
+    pub map: Option<String>,
     pub max_frames: Option<u64>,
     pub width: u32,
     pub height: u32,
@@ -135,6 +139,7 @@ impl ApplicationHandler for LiveApplication {
         let renderer = match pollster::block_on(GpuRenderer::new(
             window.clone(),
             self.options.asset.clone(),
+            self.options.map.clone(),
         )) {
             Ok(renderer) => renderer,
             Err(error) => {
@@ -192,6 +197,17 @@ impl ApplicationHandler for LiveApplication {
                     _ => {}
                 }
             }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    let pressed = state == ElementState::Pressed;
+                    renderer.set_mouse_look(pressed);
+                    window.set_cursor_visible(!pressed);
+                }
+            }
             WindowEvent::RedrawRequested => {
                 let Some(renderer) = self.renderer.as_mut() else {
                     return;
@@ -232,6 +248,20 @@ impl ApplicationHandler for LiveApplication {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        if let DeviceEvent::MouseMotion { delta } = event {
+            renderer.apply_mouse_delta(delta);
         }
     }
 }
@@ -427,6 +457,9 @@ struct CameraKeys {
     move_back: bool,
     move_left: bool,
     move_right: bool,
+    move_up: bool,
+    move_down: bool,
+    boost: bool,
     look_left: bool,
     look_right: bool,
     look_up: bool,
@@ -446,9 +479,18 @@ fn apply_camera_keys_to_pose(
         (if keys.move_forward { 1.0 } else { 0.0 }) - (if keys.move_back { 1.0 } else { 0.0 });
     let strafe_axis =
         (if keys.move_right { 1.0 } else { 0.0 }) - (if keys.move_left { 1.0 } else { 0.0 });
-    let movement = flat_forward * forward_axis + flat_right * strafe_axis;
+    let vertical_axis =
+        (if keys.move_up { 1.0 } else { 0.0 }) - (if keys.move_down { 1.0 } else { 0.0 });
+    let movement =
+        flat_forward * forward_axis + flat_right * strafe_axis + GpuVec3::Y * vertical_axis;
     if movement.length_squared() > 0.0 {
-        let delta = movement.normalize() * (CAMERA_MOVE_SPEED * dt);
+        let speed = CAMERA_MOVE_SPEED
+            * if keys.boost {
+                CAMERA_FAST_MULTIPLIER
+            } else {
+                1.0
+            };
+        let delta = movement.normalize() * (speed * dt);
         *camera_origin += delta;
         *camera_target += delta;
     }
@@ -460,23 +502,34 @@ fn apply_camera_keys_to_pose(
     let pitch = ((if keys.look_up { 1.0 } else { 0.0 }) - (if keys.look_down { 1.0 } else { 0.0 }))
         * CAMERA_LOOK_SPEED
         * dt;
-    if yaw != 0.0 || pitch != 0.0 {
-        let distance = (*camera_target - *camera_origin).length().max(0.001);
-        let mut direction = (*camera_target - *camera_origin).normalize_or_zero();
-        if yaw != 0.0 {
-            direction = Quat::from_axis_angle(GpuVec3::Y, yaw).mul_vec3(direction);
-        }
-        if pitch != 0.0 {
-            let right = direction.cross(GpuVec3::Y).normalize_or_zero();
-            let pitched = Quat::from_axis_angle(right, pitch)
-                .mul_vec3(direction)
-                .normalize_or_zero();
-            if pitched.dot(GpuVec3::Y).abs() < 0.97 {
-                direction = pitched;
-            }
-        }
-        *camera_target = *camera_origin + direction * distance;
+    rotate_camera_target(camera_origin, camera_target, yaw, pitch);
+}
+
+fn rotate_camera_target(
+    camera_origin: &mut GpuVec3,
+    camera_target: &mut GpuVec3,
+    yaw: f32,
+    pitch: f32,
+) {
+    if yaw == 0.0 && pitch == 0.0 {
+        return;
     }
+
+    let distance = (*camera_target - *camera_origin).length().max(0.001);
+    let mut direction = (*camera_target - *camera_origin).normalize_or_zero();
+    if yaw != 0.0 {
+        direction = Quat::from_axis_angle(GpuVec3::Y, yaw).mul_vec3(direction);
+    }
+    if pitch != 0.0 {
+        let right = direction.cross(GpuVec3::Y).normalize_or_zero();
+        let pitched = Quat::from_axis_angle(right, pitch)
+            .mul_vec3(direction)
+            .normalize_or_zero();
+        if pitched.dot(GpuVec3::Y).abs() < 0.97 {
+            direction = pitched;
+        }
+    }
+    *camera_target = *camera_origin + direction * distance;
 }
 
 struct DrawBatch {
@@ -640,7 +693,11 @@ struct GpuRenderer {
     auto_orbit: bool,
     camera_origin: GpuVec3,
     camera_target: GpuVec3,
+    camera_fov_y: f32,
+    camera_near: f32,
+    camera_far: f32,
     keys: CameraKeys,
+    mouse_look: bool,
     base_light_uniform: LightUniform,
 }
 
@@ -652,11 +709,15 @@ enum RenderResult {
 }
 
 impl GpuRenderer {
-    async fn new(window: Arc<Window>, asset: PathBuf) -> Result<Self, LiveError> {
-        let scene = if asset.is_dir() {
-            build_aaa_scene(&asset)
-        } else {
-            build_asset_showcase(&asset)
+    async fn new(
+        window: Arc<Window>,
+        asset: PathBuf,
+        map: Option<String>,
+    ) -> Result<Self, LiveError> {
+        let scene = match map.as_deref() {
+            Some("dust2") => build_dust2_scene(PathBuf::from("assets/dust2")),
+            _ if asset.is_dir() => build_aaa_scene(&asset),
+            _ => build_asset_showcase(&asset),
         }
         .map_err(|error| LiveError::Scene(error.to_string()))?;
         let camera_origin = GpuVec3::new(
@@ -669,6 +730,9 @@ impl GpuRenderer {
             scene.camera.target.y,
             scene.camera.target.z,
         );
+        let camera_fov_y = scene.camera.vertical_fov_radians;
+        let camera_near = scene.camera.near;
+        let camera_far = scene.camera.far;
         let size = window.inner_size();
         let instance = wgpu::Instance::new(
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
@@ -963,7 +1027,11 @@ impl GpuRenderer {
             auto_orbit: true,
             camera_origin,
             camera_target,
+            camera_fov_y,
+            camera_near,
+            camera_far,
             keys: CameraKeys::default(),
+            mouse_look: false,
             base_light_uniform: light_uniform,
         })
     }
@@ -1032,6 +1100,18 @@ impl GpuRenderer {
                 self.keys.move_right = pressed;
                 true
             }
+            KeyCode::KeyE => {
+                self.keys.move_up = pressed;
+                true
+            }
+            KeyCode::KeyQ => {
+                self.keys.move_down = pressed;
+                true
+            }
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => {
+                self.keys.boost = pressed;
+                true
+            }
             KeyCode::ArrowLeft => {
                 self.keys.look_left = pressed;
                 true
@@ -1053,6 +1133,23 @@ impl GpuRenderer {
         if handled && pressed {
             self.enter_manual_control();
         }
+    }
+
+    fn set_mouse_look(&mut self, pressed: bool) {
+        self.mouse_look = pressed;
+        if pressed {
+            self.enter_manual_control();
+        }
+    }
+
+    fn apply_mouse_delta(&mut self, delta: (f64, f64)) {
+        if !self.mouse_look {
+            return;
+        }
+        self.enter_manual_control();
+        let yaw = delta.0 as f32 * CAMERA_MOUSE_LOOK_SPEED;
+        let pitch = -(delta.1 as f32) * CAMERA_MOUSE_LOOK_SPEED;
+        rotate_camera_target(&mut self.camera_origin, &mut self.camera_target, yaw, pitch);
     }
 
     fn enter_manual_control(&mut self) {
@@ -1102,10 +1199,10 @@ impl GpuRenderer {
         let (eye, target) = self.camera_pose(elapsed);
         let view = Mat4::look_at_rh(eye, target, GpuVec3::Y);
         let projection = Mat4::perspective_rh(
-            55.0_f32.to_radians(),
+            self.camera_fov_y,
             self.config.width as f32 / self.config.height as f32,
-            0.05,
-            40.0,
+            self.camera_near,
+            self.camera_far,
         );
         let view_projection = projection * view;
         self.previous_view_projection = if self.frame_index == 0 {

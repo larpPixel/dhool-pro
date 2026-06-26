@@ -1,5 +1,5 @@
 use crate::renderer::{CpuRenderer, DebugView, RenderConfig};
-use crate::scene::{build_aaa_scene, build_asset_showcase};
+use crate::scene::{build_aaa_scene, build_asset_showcase, build_dust2_scene};
 use image::{ColorType, ImageFormat};
 use std::fmt::Write as _;
 use std::fs;
@@ -19,12 +19,13 @@ pub fn export_demo_gallery(
     output_dir: impl AsRef<Path>,
     width: u32,
     height: u32,
+    map: Option<&str>,
 ) -> Result<DemoSummary, String> {
     let asset_path = asset_path.as_ref();
-    let scene = if asset_path.is_dir() {
-        build_aaa_scene(asset_path)
-    } else {
-        build_asset_showcase(asset_path)
+    let scene = match map {
+        Some("dust2") => build_dust2_scene(PathBuf::from("assets/dust2")),
+        _ if asset_path.is_dir() => build_aaa_scene(asset_path),
+        _ => build_asset_showcase(asset_path),
     }
     .map_err(|error| error.to_string())?;
     let output_dir = output_dir.as_ref();
@@ -91,8 +92,13 @@ pub fn export_demo_gallery(
     }
 
     let triangles = scene.meshes.iter().map(|mesh| mesh.indices.len()).sum();
+    let scene_name = match map {
+        Some("dust2") => "assets/dust2 (local CS2 de_dust2 import)",
+        _ if asset_path.is_dir() => "assets/aaa (monsoon city)",
+        _ => "glTF asset showcase",
+    };
     let html = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Dhool Pro Showcase</title><style>{}</style></head><body><header><p class=\"eyebrow\">LIVE-SCENE DIAGNOSTICS</p><h1>Dhool Pro renderer showcase</h1><p>Vendor-agnostic CPU reference path · {} meshes · {} triangles · {} materials</p></header><main>{cards}</main><footer>Default gallery scene: assets/aaa, matching the live GPU monsoon city geometry and materials. Pass --asset path/to/model.gltf for the deterministic glTF showcase.</footer></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Dhool Pro Showcase</title><style>{}</style></head><body><header><p class=\"eyebrow\">LIVE-SCENE DIAGNOSTICS</p><h1>Dhool Pro renderer showcase</h1><p>Vendor-agnostic CPU reference path · {} meshes · {} triangles · {} materials</p></header><main>{cards}</main><footer>Gallery scene: {scene_name}. Pass --map dust2 for the desert map, --asset path/to/model.gltf for the deterministic glTF showcase, or omit both for the default monsoon city.</footer></body></html>",
         STYLE,
         scene.meshes.len(),
         triangles,

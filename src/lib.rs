@@ -34,7 +34,7 @@ pub use profiler::{required_debug_views, EngineProfiler, FrameBudget, FrameRepor
 pub use quality::QualityTier;
 pub use renderer::{CpuRenderer, DebugView, RenderConfig, RenderOutput, RenderPath};
 pub use scene::{
-    build_aaa_scene, build_asset_showcase, build_demo_scene, Camera, Light, Material, Mesh,
-    RenderScene, TextureImage,
+    build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene, Camera, Light,
+    Material, Mesh, RenderScene, TextureImage,
 };
 pub use world::{CameraRig, EntityId, MeshRenderer, RigidBody, Transform, World};

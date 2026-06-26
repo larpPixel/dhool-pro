@@ -446,6 +446,227 @@ pub fn build_asset_showcase(path: impl AsRef<Path>) -> Result<RenderScene, GltfI
     Ok(scene)
 }
 
+pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImportError> {
+    let root = root.as_ref();
+    let world_path = root
+        .join("generated")
+        .join("cs2")
+        .join("maps")
+        .join("de_dust2")
+        .join("world_physics_physics.glb");
+    if !world_path.is_file() {
+        return Err(GltfImportError::Gltf(format!(
+            "missing local CS2 Dust2 export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
+            world_path.display()
+        )));
+    }
+
+    let (_, mut meshes) = import_gltf(&world_path)?;
+    let materials = cs2_dust2_materials();
+    for mesh in &mut meshes {
+        let source_name = mesh.name.clone();
+        mesh.name = format!("cs2_dust2_{source_name}");
+        mesh.material_index = cs2_dust2_material_index(&source_name);
+        mesh.shadow_class = ShadowCasterClass::None;
+        mesh.is_floor_or_ground = cs2_dust2_ground_mesh(&source_name);
+        mesh.prepass_eligible = false;
+        mesh.reflection_proxy = false;
+    }
+
+    Ok(RenderScene {
+        camera: Camera {
+            position: Vec3::new(50.0, 1.8, -45.0),
+            target: Vec3::new(30.0, 1.8, -30.0),
+            up: Vec3::Y,
+            vertical_fov_radians: 62.0_f32.to_radians(),
+            near: 0.05,
+            far: 620.0,
+        },
+        materials,
+        meshes,
+        lights: vec![
+            Light {
+                name: "cs2_dust2_desert_sun",
+                kind: LightKind::Directional {
+                    direction: Vec3::new(-0.42, -0.86, -0.30).normalize_or_zero(),
+                },
+                color: Color::rgb(1.0, 0.93, 0.78),
+                intensity: 2.8,
+                casts_shadow: true,
+            },
+            Light {
+                name: "cs2_dust2_mid_bounce",
+                kind: LightKind::Local {
+                    position: Vec3::new(14.0, 8.0, -8.0),
+                    radius: 88.0,
+                },
+                color: Color::rgb(1.0, 0.62, 0.34),
+                intensity: 2.2,
+                casts_shadow: false,
+            },
+            Light {
+                name: "cs2_dust2_tunnel_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(-38.0, 6.0, -24.0),
+                    radius: 34.0,
+                },
+                color: Color::rgb(1.0, 0.54, 0.28),
+                intensity: 1.5,
+                casts_shadow: false,
+            },
+        ],
+        sky_color: Color::rgb(0.50, 0.64, 0.84),
+        ambient_color: Color::rgb(0.22, 0.18, 0.12),
+    })
+}
+
+fn cs2_dust2_materials() -> Vec<Material> {
+    vec![
+        solid_material(
+            "cs2_dust2_concrete_plaster",
+            SolidMaterialParams {
+                class: MaterialClass::Concrete,
+                base_color: Color::rgb(0.70, 0.58, 0.42),
+                roughness: 0.86,
+                metallic: 0.0,
+                specular_intensity: 0.28,
+                cavity: 1.0,
+                material_id: 40,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_dirt_sand",
+            SolidMaterialParams {
+                class: MaterialClass::Concrete,
+                base_color: Color::rgb(0.62, 0.48, 0.31),
+                roughness: 0.95,
+                metallic: 0.0,
+                specular_intensity: 0.12,
+                cavity: 1.0,
+                material_id: 41,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_wood",
+            SolidMaterialParams {
+                class: MaterialClass::Concrete,
+                base_color: Color::rgb(0.48, 0.32, 0.20),
+                roughness: 0.78,
+                metallic: 0.0,
+                specular_intensity: 0.24,
+                cavity: 1.0,
+                material_id: 42,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_metal",
+            SolidMaterialParams {
+                class: MaterialClass::Metal,
+                base_color: Color::rgb(0.42, 0.38, 0.33),
+                roughness: 0.56,
+                metallic: 1.0,
+                specular_intensity: 0.62,
+                cavity: 1.0,
+                material_id: 43,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_chainlink",
+            SolidMaterialParams {
+                class: MaterialClass::Metal,
+                base_color: Color::rgb(0.30, 0.32, 0.30),
+                roughness: 0.48,
+                metallic: 1.0,
+                specular_intensity: 0.54,
+                cavity: 1.0,
+                material_id: 44,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_glass",
+            SolidMaterialParams {
+                class: MaterialClass::Glass,
+                base_color: Color::rgb(0.46, 0.58, 0.66),
+                roughness: 0.08,
+                metallic: 0.0,
+                specular_intensity: 0.75,
+                cavity: 1.0,
+                material_id: 45,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_rock",
+            SolidMaterialParams {
+                class: MaterialClass::Concrete,
+                base_color: Color::rgb(0.50, 0.42, 0.32),
+                roughness: 0.90,
+                metallic: 0.0,
+                specular_intensity: 0.18,
+                cavity: 1.0,
+                material_id: 46,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_rubber_plastic",
+            SolidMaterialParams {
+                class: MaterialClass::Default,
+                base_color: Color::rgb(0.08, 0.08, 0.07),
+                roughness: 0.82,
+                metallic: 0.0,
+                specular_intensity: 0.20,
+                cavity: 1.0,
+                material_id: 47,
+            },
+        ),
+        solid_material(
+            "cs2_dust2_default",
+            SolidMaterialParams {
+                class: MaterialClass::Concrete,
+                base_color: Color::rgb(0.64, 0.52, 0.38),
+                roughness: 0.88,
+                metallic: 0.0,
+                specular_intensity: 0.20,
+                cavity: 1.0,
+                material_id: 48,
+            },
+        ),
+    ]
+}
+
+fn cs2_dust2_material_index(name: &str) -> usize {
+    if name.contains("chainlink") {
+        4
+    } else if name.contains("glass") {
+        5
+    } else if name.contains("metal")
+        || name.contains("barrel")
+        || name.contains("dumpster")
+        || name.contains("vehicle")
+    {
+        3
+    } else if name.contains("wood") {
+        2
+    } else if name.contains("dirt") || name.contains("sand") {
+        1
+    } else if name.contains("rock") {
+        6
+    } else if name.contains("rubber") || name.contains("plastic") {
+        7
+    } else if name.contains("concrete") {
+        0
+    } else {
+        8
+    }
+}
+
+fn cs2_dust2_ground_mesh(name: &str) -> bool {
+    name.contains("dirt")
+        || name.contains("sand")
+        || name.contains("concrete")
+        || name.contains("carpet")
+        || name.contains("rock")
+}
+
 pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImportError> {
     let root = root.as_ref();
     let mut materials = vec![

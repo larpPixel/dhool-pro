@@ -14,9 +14,10 @@ cargo run --release -- --live
 The default scene is a rain-soaked monsoon city scene assembled from vendored Poly
 Haven CC0 models, PBR surfaces, and project-local generated facade/market textures.
 The foreground alley opens into a wider cross-street, market lane, and distant
-apartment skyline. Press `Space` to pause or resume the cinematic camera, hold
-`W`/`A`/`S`/`D` to move, use the arrow keys to look around, and press `Escape` to
-exit. Select a present-capable adapter by name when testing multiple GPUs:
+apartment skyline. Press `Space` to pause or resume the cinematic camera; hold
+right mouse to mouselook; use `W`/`A`/`S`/`D` to move, `Q`/`E` to descend/ascend,
+`Shift` to boost, arrow keys as keyboard look fallback, and `Escape` to exit.
+Select a present-capable adapter by name when testing multiple GPUs:
 
 ```sh
 DHOOL_GPU=AMD cargo run --release -- --live

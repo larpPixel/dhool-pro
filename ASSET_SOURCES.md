@@ -26,6 +26,19 @@ The downloaded glTF models retain their base-color, tangent-space normal, and pa
 ambient-occlusion/roughness/metallic textures. The files are vendored under
 `assets/aaa` so the scene is deterministic and works offline.
 
+## Local CS2 Dust2 Import
+
+The optional `--map dust2` scene consumes a local, git-ignored export from the
+user's licensed Counter-Strike 2 install:
+
+- Source VPK: `/mnt/windows/Program Files (x86)/Steam/steamapps/common/Counter-Strike Global Offensive/game/csgo/maps/de_dust2.vpk`
+- Exporter: ValveResourceFormat `Source2Viewer-CLI`
+- Import script: `scripts/import_cs2_dust2.sh`
+- Local output: `assets/dust2/generated/cs2/maps/de_dust2/world_physics_physics.glb`
+
+The generated CS2-derived output is intentionally ignored by git and is not
+redistributed by this project.
+
 ## Generated City Decals
 
 The expanded city uses these built-in image-generation outputs as project-local

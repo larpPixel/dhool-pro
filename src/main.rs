@@ -7,9 +7,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--live") {
         let asset = option_value(&args, "--asset").unwrap_or_else(|| "assets/aaa".to_string());
+        let map = option_value(&args, "--map");
         let max_frames = option_value(&args, "--frames").and_then(|value| value.parse().ok());
         if let Err(error) = run_live_renderer(LiveOptions {
             asset: asset.into(),
+            map,
             max_frames,
             width: 1280,
             height: 720,
@@ -91,7 +93,12 @@ fn main() {
             .and_then(|asset_index| args.get(asset_index + 1))
             .map(String::as_str)
             .unwrap_or("assets/aaa");
-        let summary = export_demo_gallery(asset, output, 480, 300).unwrap_or_else(|error| {
+        let map = args
+            .iter()
+            .position(|arg| arg == "--map")
+            .and_then(|map_index| args.get(map_index + 1))
+            .map(String::as_str);
+        let summary = export_demo_gallery(asset, output, 480, 300, map).unwrap_or_else(|error| {
             eprintln!("gallery export failed: {error}");
             std::process::exit(2);
         });
