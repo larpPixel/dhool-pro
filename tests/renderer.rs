@@ -145,6 +145,102 @@ fn aaa_scene_uses_generated_puddle_breakup_maps() {
 }
 
 #[test]
+fn aaa_scene_uses_generated_decal_assets_and_deeper_set_dressing() {
+    let scene = build_aaa_scene("assets/aaa").expect("AAA scene");
+    for path in [
+        "assets/aaa/generated/cyan_transit_panel.png",
+        "assets/aaa/generated/amber_hazard_placard.png",
+        "assets/aaa/generated/wet_tarp_cable_net.png",
+    ] {
+        assert!(std::path::Path::new(path).is_file(), "{path} should exist");
+    }
+
+    for name in [
+        "generated_cyan_transit_panel",
+        "generated_amber_hazard_placard",
+        "generated_wet_tarp_cable_net",
+    ] {
+        let material = scene
+            .materials
+            .iter()
+            .find(|material| material.name == name)
+            .expect("generated material");
+        assert!(material.base_color_texture.is_some());
+        assert_eq!(material.texture_sample_count, 1);
+    }
+
+    for mesh_name in [
+        "left_generated_cyan_transit_panel",
+        "right_generated_amber_hazard_placard",
+        "deep_generated_cyan_transit_panel",
+        "left_wet_tarp_cable_net",
+        "center_hanging_tarp_cable_sheet",
+        "deep_overhead_service_bridge",
+        "deep_cyan_panel_reflection_pool",
+    ] {
+        assert!(
+            scene.meshes.iter().any(|mesh| mesh.name == mesh_name),
+            "{mesh_name} should be in the expanded alley scene"
+        );
+    }
+
+    assert!(scene.meshes.len() >= 60);
+    assert!(scene
+        .lights
+        .iter()
+        .any(|light| light.name == "deep_cyan_panel_fill"));
+    assert!(scene
+        .lights
+        .iter()
+        .any(|light| light.name == "deep_amber_service_fill"));
+}
+
+#[test]
+fn aaa_scene_uses_generated_material_texture_sets() {
+    let scene = build_aaa_scene("assets/aaa").expect("AAA scene");
+    for path in [
+        "assets/aaa/generated/textures/wet_corrugated_metal_base.png",
+        "assets/aaa/generated/textures/wet_corrugated_metal_normal.png",
+        "assets/aaa/generated/textures/wet_corrugated_metal_arm.png",
+        "assets/aaa/generated/textures/oily_patched_concrete_base.png",
+        "assets/aaa/generated/textures/oily_patched_concrete_normal.png",
+        "assets/aaa/generated/textures/oily_patched_concrete_arm.png",
+    ] {
+        assert!(std::path::Path::new(path).is_file(), "{path} should exist");
+    }
+
+    for name in [
+        "generated_wet_corrugated_metal",
+        "generated_oily_patched_concrete",
+    ] {
+        let material = scene
+            .materials
+            .iter()
+            .find(|material| material.name == name)
+            .expect("generated texture-set material");
+        assert!(material.base_color_texture.is_some());
+        assert!(material.normal_texture.is_some());
+        assert!(material.pbr_texture.is_some());
+        assert_eq!(material.texture_sample_count, 3);
+        assert!(material.flags.uses_bent_normals);
+    }
+
+    for mesh_name in [
+        "right_generated_corrugated_service_skin",
+        "left_generated_corrugated_access_panel",
+        "deep_generated_corrugated_rollup_door",
+        "generated_oily_concrete_foreground_slab",
+        "generated_oily_concrete_mid_service_slab",
+        "generated_oily_concrete_far_gate_slab",
+    ] {
+        assert!(
+            scene.meshes.iter().any(|mesh| mesh.name == mesh_name),
+            "{mesh_name} should use a generated material texture set"
+        );
+    }
+}
+
+#[test]
 fn aaa_prepass_is_limited_to_selected_large_occluders() {
     let scene = build_aaa_scene("assets/aaa").expect("AAA scene");
     let prepassed: Vec<_> = scene

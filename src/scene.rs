@@ -548,15 +548,90 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         puddle.pbr_texture = Some(load_puddle_texture("generated_puddle_arm.png")?);
         puddle.texture_sample_count = 3;
     }
+    let cyan_generated_panel_material = materials.len();
+    materials.push(textured_generated_material(
+        "generated_cyan_transit_panel",
+        load_generated_texture(root, "cyan_transit_panel.png")?,
+        TexturedGeneratedMaterialParams {
+            class: MaterialClass::Emissive,
+            base_color: Color::rgb(0.88, 0.96, 1.0),
+            roughness: 0.18,
+            metallic: 0.0,
+            specular_intensity: 0.22,
+            cavity: 1.0,
+            material_id: 19,
+            emission: Color::rgb(0.18, 2.4, 3.3),
+        },
+    ));
+    let amber_generated_panel_material = materials.len();
+    materials.push(textured_generated_material(
+        "generated_amber_hazard_placard",
+        load_generated_texture(root, "amber_hazard_placard.png")?,
+        TexturedGeneratedMaterialParams {
+            class: MaterialClass::Emissive,
+            base_color: Color::rgb(1.0, 0.90, 0.72),
+            roughness: 0.24,
+            metallic: 0.0,
+            specular_intensity: 0.18,
+            cavity: 0.95,
+            material_id: 20,
+            emission: Color::rgb(2.8, 0.82, 0.12),
+        },
+    ));
+    let wet_tarp_material = materials.len();
+    materials.push(textured_generated_material(
+        "generated_wet_tarp_cable_net",
+        load_generated_texture(root, "wet_tarp_cable_net.png")?,
+        TexturedGeneratedMaterialParams {
+            class: MaterialClass::Default,
+            base_color: Color::rgb(0.72, 0.78, 0.88),
+            roughness: 0.58,
+            metallic: 0.0,
+            specular_intensity: 0.34,
+            cavity: 0.86,
+            material_id: 21,
+            emission: Color::BLACK,
+        },
+    ));
+    let wet_corrugated_metal_material = materials.len();
+    materials.push(generated_texture_set_material(
+        root,
+        "generated_wet_corrugated_metal",
+        "wet_corrugated_metal",
+        GeneratedTextureSetMaterialParams {
+            class: MaterialClass::Metal,
+            base_color: Color::rgb(0.90, 0.96, 1.0),
+            roughness: 0.58,
+            metallic: 0.86,
+            specular_intensity: 0.72,
+            cavity: 0.92,
+            material_id: 22,
+        },
+    )?);
+    let oily_patched_concrete_material = materials.len();
+    materials.push(generated_texture_set_material(
+        root,
+        "generated_oily_patched_concrete",
+        "oily_patched_concrete",
+        GeneratedTextureSetMaterialParams {
+            class: MaterialClass::Concrete,
+            base_color: Color::rgb(0.92, 0.94, 0.96),
+            roughness: 0.86,
+            metallic: 0.0,
+            specular_intensity: 0.36,
+            cavity: 0.88,
+            material_id: 23,
+        },
+    )?);
 
     let mut scene = RenderScene {
         camera: Camera {
-            position: Vec3::new(0.18, 1.34, 5.45),
-            target: Vec3::new(0.03, 1.02, -7.85),
+            position: Vec3::new(0.24, 1.42, 6.65),
+            target: Vec3::new(0.02, 1.04, -10.75),
             up: Vec3::Y,
-            vertical_fov_radians: 61.0_f32.to_radians(),
+            vertical_fov_radians: 64.0_f32.to_radians(),
             near: 0.05,
-            far: 60.0,
+            far: 80.0,
         },
         materials,
         meshes: Vec::new(),
@@ -636,6 +711,36 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 intensity: 3.6,
                 casts_shadow: false,
             },
+            Light {
+                name: "deep_cyan_panel_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(1.8, 3.15, -24.1),
+                    radius: 6.2,
+                },
+                color: Color::rgb(0.12, 0.78, 1.0),
+                intensity: 4.6,
+                casts_shadow: false,
+            },
+            Light {
+                name: "deep_amber_service_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(-3.0, 2.25, -20.2),
+                    radius: 5.3,
+                },
+                color: Color::rgb(1.0, 0.42, 0.10),
+                intensity: 3.2,
+                casts_shadow: false,
+            },
+            Light {
+                name: "left_tarp_graze_fill",
+                kind: LightKind::Local {
+                    position: Vec3::new(-3.75, 2.85, -12.6),
+                    radius: 4.8,
+                },
+                color: Color::rgb(0.34, 0.64, 1.0),
+                intensity: 2.1,
+                casts_shadow: false,
+            },
         ],
         sky_color: Color::rgb(0.006, 0.014, 0.034),
         ambient_color: Color::rgb(0.024, 0.030, 0.046),
@@ -645,45 +750,45 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         plane_mesh(
             "rain_darkened_asphalt",
             7.0,
-            27.0,
+            36.0,
             0,
-            Vec2::new(3.5, 14.0),
-            Vec3::new(0.0, -0.06, -5.0),
+            Vec2::new(3.5, 18.0),
+            Vec3::new(0.0, -0.06, -7.5),
             true,
         ),
         plane_mesh(
             "left_concrete_walk",
             1.5,
-            27.0,
+            36.0,
             1,
-            Vec2::new(1.5, 13.0),
-            Vec3::new(-4.25, 0.0, -5.0),
+            Vec2::new(1.5, 18.0),
+            Vec3::new(-4.25, 0.0, -7.5),
             true,
         ),
         plane_mesh(
             "right_concrete_walk",
             1.5,
-            27.0,
+            36.0,
             1,
-            Vec2::new(1.5, 13.0),
-            Vec3::new(4.25, 0.0, -5.0),
+            Vec2::new(1.5, 18.0),
+            Vec3::new(4.25, 0.0, -7.5),
             true,
         ),
         wall_mesh(
             "left_aged_brick",
-            27.0,
+            36.0,
             7.0,
             2,
-            Vec2::new(13.5, 3.5),
-            Mat4::rotation_y(90.0_f32.to_radians()) * Mat4::translation(Vec3::new(-5.0, 3.5, -5.0)),
+            Vec2::new(18.0, 3.5),
+            Mat4::rotation_y(90.0_f32.to_radians()) * Mat4::translation(Vec3::new(-5.0, 3.5, -7.5)),
         ),
         wall_mesh(
             "right_aged_brick",
-            27.0,
+            36.0,
             7.0,
             2,
-            Vec2::new(13.5, 3.5),
-            Mat4::rotation_y(-90.0_f32.to_radians()) * Mat4::translation(Vec3::new(5.0, 3.5, -5.0)),
+            Vec2::new(18.0, 3.5),
+            Mat4::rotation_y(-90.0_f32.to_radians()) * Mat4::translation(Vec3::new(5.0, 3.5, -7.5)),
         ),
         wall_mesh(
             "alley_end_brick",
@@ -691,7 +796,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             7.0,
             2,
             Vec2::new(5.0, 3.5),
-            Mat4::translation(Vec3::new(0.0, 3.5, -18.45)),
+            Mat4::translation(Vec3::new(0.0, 3.5, -25.45)),
         ),
         wall_mesh(
             "left_loading_shutter",
@@ -996,6 +1101,127 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::rotation_y(-90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(4.46, 3.25, -12.9)),
         ),
+        detail_wall_mesh(
+            "left_generated_cyan_transit_panel",
+            3.85,
+            2.28,
+            cyan_generated_panel_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.47, 2.85, -16.55)),
+        ),
+        detail_wall_mesh(
+            "right_generated_amber_hazard_placard",
+            2.75,
+            1.84,
+            amber_generated_panel_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.46, 2.35, -16.15)),
+        ),
+        detail_wall_mesh(
+            "deep_generated_cyan_transit_panel",
+            4.7,
+            2.82,
+            cyan_generated_panel_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::translation(Vec3::new(1.75, 3.0, -25.30)),
+        ),
+        detail_wall_mesh(
+            "deep_generated_amber_service_marker",
+            2.1,
+            1.34,
+            amber_generated_panel_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::translation(Vec3::new(-3.15, 2.25, -25.28)),
+        ),
+        detail_wall_mesh(
+            "left_wet_tarp_cable_net",
+            4.45,
+            3.35,
+            wet_tarp_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.50, 2.35, -11.45)),
+        ),
+        detail_wall_mesh(
+            "center_hanging_tarp_cable_sheet",
+            3.55,
+            2.6,
+            wet_tarp_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-8.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-0.78, 2.55, -18.10)),
+        ),
+        detail_wall_mesh(
+            "right_far_tarp_patch",
+            3.25,
+            2.45,
+            wet_tarp_material,
+            Vec2::new(1.0, 1.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.50, 2.15, -20.45)),
+        ),
+        detail_wall_mesh(
+            "right_generated_corrugated_service_skin",
+            3.6,
+            4.9,
+            wet_corrugated_metal_material,
+            Vec2::new(1.0, 1.45),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.42, 2.55, -14.35)),
+        ),
+        detail_wall_mesh(
+            "left_generated_corrugated_access_panel",
+            2.85,
+            3.95,
+            wet_corrugated_metal_material,
+            Vec2::new(0.85, 1.25),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.42, 2.12, -18.95)),
+        ),
+        detail_wall_mesh(
+            "deep_generated_corrugated_rollup_door",
+            3.35,
+            4.25,
+            wet_corrugated_metal_material,
+            Vec2::new(1.0, 1.25),
+            Mat4::translation(Vec3::new(-2.10, 2.20, -25.24)),
+        ),
+        detail_wall_mesh(
+            "deep_overhead_service_bridge",
+            8.6,
+            0.62,
+            dark_fixture_material,
+            Vec2::new(3.5, 1.0),
+            Mat4::translation(Vec3::new(0.0, 4.46, -17.55)),
+        ),
+        detail_wall_mesh(
+            "deep_overhead_cable_bundle",
+            8.8,
+            0.16,
+            warm_edge_material,
+            Vec2::new(4.0, 1.0),
+            Mat4::translation(Vec3::new(0.0, 4.12, -19.30)),
+        ),
+        detail_wall_mesh(
+            "far_left_stacked_service_panels",
+            2.75,
+            3.1,
+            dark_fixture_material,
+            Vec2::new(1.0, 1.6),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.54, 2.05, -21.40)),
+        ),
+        detail_wall_mesh(
+            "far_right_vertical_rib",
+            0.14,
+            5.3,
+            dark_fixture_material,
+            Vec2::new(1.0, 2.0),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.48, 2.66, -22.65)),
+        ),
         puddle_mesh(
             "foreground_reflection_puddle",
             2.05,
@@ -1020,6 +1246,57 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Vec2::new(1.1, 1.8),
             Vec3::new(1.20, -0.048, -7.05),
         ),
+        plane_mesh(
+            "generated_oily_concrete_foreground_slab",
+            2.45,
+            4.80,
+            oily_patched_concrete_material,
+            Vec2::new(0.95, 1.85),
+            Vec3::new(-1.55, -0.045, 1.30),
+            true,
+        ),
+        plane_mesh(
+            "generated_oily_concrete_mid_service_slab",
+            2.25,
+            5.40,
+            oily_patched_concrete_material,
+            Vec2::new(0.85, 2.10),
+            Vec3::new(-2.25, -0.044, -12.45),
+            true,
+        ),
+        plane_mesh(
+            "generated_oily_concrete_far_gate_slab",
+            3.10,
+            3.70,
+            oily_patched_concrete_material,
+            Vec2::new(1.2, 1.45),
+            Vec3::new(2.05, -0.044, -22.25),
+            true,
+        ),
+        puddle_mesh(
+            "right_amber_service_reflection_slick",
+            1.45,
+            4.95,
+            puddle_material,
+            Vec2::new(0.8, 2.5),
+            Vec3::new(2.18, -0.048, -13.70),
+        ),
+        puddle_mesh(
+            "deep_cyan_panel_reflection_pool",
+            2.65,
+            4.4,
+            puddle_material,
+            Vec2::new(1.35, 2.25),
+            Vec3::new(0.88, -0.048, -20.65),
+        ),
+        puddle_mesh(
+            "far_service_gate_rain_pool",
+            1.85,
+            2.75,
+            puddle_material,
+            Vec2::new(0.9, 1.5),
+            Vec3::new(-2.45, -0.048, -22.95),
+        ),
     ]);
 
     for name in [
@@ -1042,6 +1319,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::translation(Vec3::new(-3.18, 0.02, -5.20)),
             Mat4::rotation_y(0.35) * Mat4::translation(Vec3::new(-2.58, 0.02, -5.68)),
             Mat4::rotation_y(-0.5) * Mat4::translation(Vec3::new(3.18, 0.02, -10.95)),
+            Mat4::rotation_y(0.65) * Mat4::translation(Vec3::new(3.02, 0.02, -17.60)),
+            Mat4::rotation_y(-0.20) * Mat4::translation(Vec3::new(-2.72, 0.02, -20.25)),
         ],
     )?;
     append_gltf_instances(
@@ -1052,6 +1331,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::translation(Vec3::new(-3.48, 0.02, -0.75)),
             Mat4::translation(Vec3::new(3.68, 0.02, -6.65)),
             Mat4::translation(Vec3::new(-3.78, 0.02, -13.15)),
+            Mat4::translation(Vec3::new(3.78, 0.02, -18.35)),
+            Mat4::translation(Vec3::new(-3.86, 0.02, -23.20)),
         ],
     )?;
     append_gltf_instances(
@@ -1061,6 +1342,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         &[
             Mat4::rotation_y(-0.22) * Mat4::translation(Vec3::new(0.85, 0.0, -6.2)),
             Mat4::rotation_y(0.18) * Mat4::translation(Vec3::new(0.65, 0.0, -11.3)),
+            Mat4::rotation_y(-0.38) * Mat4::translation(Vec3::new(-0.65, 0.0, -15.85)),
+            Mat4::rotation_y(0.26) * Mat4::translation(Vec3::new(0.35, 0.0, -21.20)),
         ],
     )?;
     append_gltf_instances(
@@ -1074,6 +1357,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             Mat4::scale(Vec3::splat(0.1))
                 * Mat4::rotation_y(90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-3.84, 0.02, -6.65)),
+            Mat4::scale(Vec3::splat(0.1))
+                * Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(3.82, 0.02, -18.80)),
         ],
     )?;
     append_gltf_instances(
@@ -1085,6 +1371,10 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 * Mat4::translation(Vec3::new(4.12, 0.05, -2.35)),
             Mat4::rotation_y(90.0_f32.to_radians())
                 * Mat4::translation(Vec3::new(-4.12, 0.05, -13.85)),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(4.10, 0.05, -20.95)),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-4.10, 0.05, -22.60)),
         ],
     )?;
     append_gltf_instances(
@@ -1094,6 +1384,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         &[
             Mat4::rotation_y(0.22) * Mat4::translation(Vec3::new(-3.35, 0.34, -8.85)),
             Mat4::rotation_y(-0.35) * Mat4::translation(Vec3::new(3.32, 0.34, -12.85)),
+            Mat4::rotation_y(0.90) * Mat4::translation(Vec3::new(2.92, 0.34, -18.95)),
+            Mat4::rotation_y(-0.72) * Mat4::translation(Vec3::new(-3.05, 0.34, -23.45)),
         ],
     )?;
     append_gltf_instances(
@@ -1103,6 +1395,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         &[
             Mat4::rotation_y(-0.3) * Mat4::translation(Vec3::new(3.28, 0.02, -4.15)),
             Mat4::rotation_y(0.5) * Mat4::translation(Vec3::new(-3.28, 0.02, -14.05)),
+            Mat4::rotation_y(-0.68) * Mat4::translation(Vec3::new(3.10, 0.02, -16.90)),
+            Mat4::rotation_y(0.42) * Mat4::translation(Vec3::new(-3.18, 0.02, -21.80)),
         ],
     )?;
 
@@ -1166,6 +1460,110 @@ fn emissive_material(name: &str, base_color: Color, emission: Color, material_id
         },
         emission,
     }
+}
+
+#[derive(Clone, Copy)]
+struct TexturedGeneratedMaterialParams {
+    class: MaterialClass,
+    base_color: Color,
+    roughness: f32,
+    metallic: f32,
+    specular_intensity: f32,
+    cavity: f32,
+    material_id: u8,
+    emission: Color,
+}
+
+#[derive(Clone, Copy)]
+struct GeneratedTextureSetMaterialParams {
+    class: MaterialClass,
+    base_color: Color,
+    roughness: f32,
+    metallic: f32,
+    specular_intensity: f32,
+    cavity: f32,
+    material_id: u8,
+}
+
+fn load_generated_texture(root: &Path, filename: &str) -> Result<TextureImage, GltfImportError> {
+    let path = root.join("generated").join(filename);
+    TextureImage::from_path(&path)
+        .map_err(|message| GltfImportError::Gltf(format!("{}: {message}", path.display())))
+}
+
+fn load_generated_material_texture(
+    root: &Path,
+    filename: &str,
+) -> Result<TextureImage, GltfImportError> {
+    let path = root.join("generated").join("textures").join(filename);
+    TextureImage::from_path(&path)
+        .map_err(|message| GltfImportError::Gltf(format!("{}: {message}", path.display())))
+}
+
+fn textured_generated_material(
+    name: &str,
+    texture: TextureImage,
+    params: TexturedGeneratedMaterialParams,
+) -> Material {
+    let emissive = params.emission != Color::BLACK;
+    Material {
+        name: name.to_string(),
+        class: params.class,
+        base_color: params.base_color,
+        base_color_texture: Some(texture),
+        normal_texture: None,
+        pbr_texture: None,
+        roughness: params.roughness,
+        metallic: params.metallic,
+        specular_intensity: params.specular_intensity,
+        cavity: params.cavity,
+        material_id: params.material_id,
+        texture_sample_count: 1,
+        flags: MaterialFlags {
+            emissive,
+            receives_contact_shadows: !emissive,
+            uses_bent_normals: params.specular_intensity > 0.15,
+            ..MaterialFlags::default()
+        },
+        emission: params.emission,
+    }
+}
+
+fn generated_texture_set_material(
+    root: &Path,
+    name: &str,
+    stem: &str,
+    params: GeneratedTextureSetMaterialParams,
+) -> Result<Material, GltfImportError> {
+    Ok(Material {
+        name: name.to_string(),
+        class: params.class,
+        base_color: params.base_color,
+        base_color_texture: Some(load_generated_material_texture(
+            root,
+            &format!("{stem}_base.png"),
+        )?),
+        normal_texture: Some(load_generated_material_texture(
+            root,
+            &format!("{stem}_normal.png"),
+        )?),
+        pbr_texture: Some(load_generated_material_texture(
+            root,
+            &format!("{stem}_arm.png"),
+        )?),
+        roughness: params.roughness,
+        metallic: params.metallic,
+        specular_intensity: params.specular_intensity,
+        cavity: params.cavity,
+        material_id: params.material_id,
+        texture_sample_count: 3,
+        flags: MaterialFlags {
+            receives_contact_shadows: true,
+            uses_bent_normals: true,
+            ..MaterialFlags::default()
+        },
+        emission: Color::BLACK,
+    })
 }
 
 #[derive(Clone, Copy)]

@@ -33,8 +33,8 @@ AO/roughness/metallic maps.
 
 ![Rainy industrial live GPU scene](demo-output/aaa-live.png)
 
-The 26 MiB asset bundle is checked in for deterministic offline runs. Refresh it
-from the recorded upstream manifest with:
+The asset bundle is checked in for deterministic offline runs. Refresh the
+vendored upstream assets from the recorded manifest with:
 
 ```sh
 scripts/fetch_aaa_assets.sh

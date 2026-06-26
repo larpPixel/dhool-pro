@@ -26,6 +26,32 @@ The downloaded glTF models retain their base-color, tangent-space normal, and pa
 ambient-occlusion/roughness/metallic textures. The files are vendored under
 `assets/aaa` so the scene is deterministic and works offline.
 
+## Generated Alley Decals
+
+The expanded alley uses these built-in image-generation outputs as project-local
+texture/decal assets:
+
+- `assets/aaa/generated/cyan_transit_panel.png`
+- `assets/aaa/generated/amber_hazard_placard.png`
+- `assets/aaa/generated/wet_tarp_cable_net.png`
+
+The prompts asked for front-facing rainy industrial game textures with no logos,
+watermarks, or readable brand text: a cyan transit schematic panel, an amber
+hazard placard, and a wet tarp/cable-net material. They are loaded by
+`build_aaa_scene` as regular `TextureImage` base-color textures, then applied to
+new wall, hanging-sheet, and far-depth set dressing meshes.
+
+The scene also uses two generated material texture sets under
+`assets/aaa/generated/textures`:
+
+- `wet_corrugated_metal_{base,normal,arm}.png`
+- `oily_patched_concrete_{base,normal,arm}.png`
+
+The base maps were created with the built-in image generation tool from tileable
+PBR game-texture prompts for rainy corrugated service metal and oily patched
+concrete. The normal maps and packed ARM maps are derived locally from those
+base maps for deterministic offline rendering.
+
 ## Rain and Wetness
 
 Rain streaks are rendered as world-space depth-tested geometry in
