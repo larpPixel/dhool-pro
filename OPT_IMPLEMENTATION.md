@@ -1,109 +1,99 @@
 # `opt.md` implementation ledger
 
-This file is the coverage ledger for the pipeline described by `opt.md`. The
-transcript mixes production recommendations, workflow requirements, examples,
-opinions, marketing advice, platform-specific observations, and proposals that
-the speaker explicitly labels as unfinished research. Treating all of those as
-equally implementable would hide gaps rather than close them.
+This ledger maps the transcript to code that actually executes. `opt.md` also
+contains opinions, examples from other engines, marketing suggestions, and
+several proposals the speaker explicitly calls unfinished research. Those are
+not relabeled as shipped features.
 
-Status meanings:
+Status definitions:
 
-- **Live**: exercised by the wgpu renderer in `src/gpu.rs` and its shaders.
-- **Reference**: exercised by the deterministic CPU renderer or engine tooling.
-- **Contract**: represented and validated as an engine/asset/render-graph rule.
-- **Research**: the transcript explicitly leaves the technique unresolved; it
-  is not presented as production-ready behavior here.
-- **Not applicable**: commentary or a platform/product path outside this demo.
+- **Live**: executed by the wgpu renderer and validated on the Vulkan path.
+- **Reference**: implemented by the deterministic CPU renderer/tooling.
+- **Contract**: enforced by the render graph or asset validation.
+- **Research**: the source does not define a production-ready answer.
+- **Out of scope**: commentary rather than renderer behavior.
 
-## Frame setup, resources, and visibility
+## Frame setup and geometry
 
-| Transcript requirement | Status | Implementation |
+| Requirement | Status | Evidence |
 |---|---|---|
-| Keep start-of-frame GPU work small | Contract | The baseline graph contains only explicit visibility setup; animation and scene management remain CPU-side. |
-| Clear depth and motion/coverage, but do not clear fully overwritten G-buffers or post targets | Live + Reference | Reverse-Z depth and motion are cleared; G-buffer and full-screen overwrite targets use load/overwrite behavior. The CPU reference resets depth, coverage, and velocity without wiping every material field. Graph validation rejects suspicious clears. |
-| Never rasterize a triangle merely to clear a target | Contract | No clear-only draw exists; required clears are attachment load operations. |
-| Partial depth prepass contains only large/expensive opaque occluders | Live + Contract | `prepass_eligible` batches use the depth-only pipeline. Asset validation rejects alpha-tested prepass participation. Scene tests constrain the selected occluders. |
-| No opacity sampling, motion vectors, or pixel shader work in the ordinary prepass | Live + Contract | The depth pipeline is vertex-only. Motion is emitted by the base pass. |
-| Render alpha-tested/non-prepassed geometry before prepassed geometry in the base pass | Live | Base-pass batches execute `false` then `true` for `prepass_eligible`, leaving prepassed expensive surfaces last. |
-| Front-to-back/coverage-aware ordering and quad-overdraw diagnostics | Contract + Reference | Scene authoring exposes prepass eligibility; asset/profiler rules cover texture count and prepass misuse; CPU debug views expose overdraw and quad utilization. |
-| Reverse-Z with 32-bit hardware depth | Live + Reference | Main camera and shadow cameras use reverse-Z, D32 clears to zero, compare operations are `GreaterEqual`, and all depth consumers use the same convention. |
-| Hi-Z min/max/discontinuity resource | Live + Reference | R32 depth copy feeds the compute Hi-Z pass; the reference kernel and architecture tests validate reduction behavior. |
-| Occlusion culling derived from prepass Hi-Z | Research | The transcript calls this under-researched. Hi-Z is available, but the renderer does not claim an unvalidated draw-culling policy. |
+| Keep GPU-driven frame setup small | Live | Scene, animation, draw ordering, and batch creation stay CPU-side. GPU compute starts with explicit visibility/post work. |
+| Clear only depth, coverage/motion, and resources that cannot be overwritten | Live + Contract | Attachment clears are limited to required depth/stencil, motion/coverage, and history-like targets. Full-screen outputs use overwrite/load semantics. Graph validation rejects suspicious clears. |
+| Never draw geometry just to clear a target | Live | All required clears use attachment load operations. |
+| Non-alpha selective depth prepass | Live + Contract | Only `prepass_eligible` opaque batches enter the vertex-only prepass. Asset validation rejects alpha-tested or motion-vector prepasses. |
+| Alpha-tested geometry first, then non-prepassed opaque, then prepassed geometry | Live | The base pass has three explicit categories in that order. Batches are front-to-back within each category. |
+| No opacity samples or pixel shader in the ordinary prepass | Live | `depth_prepass.wgsl` is vertex-only. Alpha opacity is sampled only by base and alpha-shadow pipelines. |
+| Four ordinary texture samples, packed material textures, no runtime texture blending | Contract | Material and import validation enforce the sample budget, packed roles, bent normals, and baked blends. |
+| Dedicated alpha opacity texture | Live + Contract | Alpha materials upload an R8 single-channel opacity mip chain (the uncompressed runtime equivalent of the required BC4 role); asset metadata requires BC4 source data. |
+| Alpha-aware shadow maps without penalizing opaque casters | Live | Opaque casters use the vertex-only shadow pipeline; alpha casters use `alpha_shadow.wgsl` and the dedicated opacity texture. |
+| Dual material profiles instead of a metallic-only interpretation | Live | A 256-entry dielectric/conductor GPU table is indexed by packed material ID. It also carries skin, hair, and foliage response metadata. |
+| Skin transmission/wrapped diffuse and anisotropic hair response | Live + Reference | The live material-profile lighting path handles skin/foliage backscatter and a strand-oriented hair highlight; the CPU renderer retains class-specific Fresnel behavior. Eyes remain ordinary compact forward/deferred material geometry because the transcript calls advanced eye/hair work unfinished. |
+| LOD topology, two-position Bayer transitions, and synchronized shadow fades | Contract / missing runtime system | Import validation catches dense alpha cards and long thin triangles. This demo has no streaming runtime LOD set, so it does not claim live fades. |
 
-## Materials, geometry, and asset workflow
+## Depth, visibility, shadows, and lighting
 
-| Transcript requirement | Status | Implementation |
+| Requirement | Status | Evidence |
 |---|---|---|
-| Four ordinary texture samples maximum | Contract | Import budgets, material descriptors, profiler warnings, and tests enforce/report the limit. |
-| No runtime texture blending; bake object-specific blends | Contract | `MaterialDesc` rejects runtime blending and the import workflow produces packed material textures. |
-| Separate BC4 opacity for alpha-tested depth/shadow work | Contract | Asset validation requires a dedicated BC4 opacity role. |
-| BC7 normal/bent-normal plus compact base/AO and specular/roughness packing | Contract | Asset descriptions and validation encode the packing policy. |
-| Geometry cutouts near the camera, stable LODs farther away, dithered transitions and shadows | Contract | Asset validation/debug contracts cover topology and LOD state; the demo has no runtime streaming LOD system and therefore does not falsely claim live transitions. |
-| Material-class/ID-driven shading instead of an extra metallic G-buffer | Live + Reference | The packed PBR/material fields and material flags drive glass, emissive, metal, wetness, and contact behavior. |
-| Artist-visible texture, topology, shadow, reflection-proxy, and prepass budgets | Contract | Asset pipeline validation and profiler warnings surface these decisions rather than silently accepting them. |
-| Dust2 source import and packed PBR conversion | Live workflow | `scripts/import_cs2_dust2.sh`, `src/gltf_import.rs`, and the asset documentation cover import, material assignment, texture limits, and provenance. |
+| Reverse-Z 32-bit depth | Live + Reference | Main depth is D32S8, shadow depth is D32, clear is zero, and comparisons are reverse-Z throughout. |
+| MSAA depth/G-buffer and retained coverage | Live | The base pass uses a true 2x multisampled D32S8/albedo/normal/PBR/motion set. A custom per-sample resolve chooses the closest surface, averages matching samples, resolves D32, and writes R8 coverage. |
+| Programmable sample locations | Research / API limitation | The transcript calls its pattern an early proposal. Portable wgpu does not expose programmable locations; the renderer fails clearly if the adapter cannot provide its required 2x D32 format support. |
+| Hi-Z min/max/discontinuity data | Live + Reference | Resolved depth is copied to R32 and reduced into the half-resolution Hi-Z compute target; native reference tests cover reduction. |
+| Prepass Hi-Z occlusion draw culling | Research | The source explicitly says this policy is under-researched. Hi-Z exists, but no speculative culling policy is claimed. |
+| Focused/cached directional and local shadow maps | Live | Shadow cameras derive relevant bounds/range/FOV; static results cache after the first render; ground/floor casters are excluded. |
+| Distance-dependent shadow resolution and full cascade/atlas system | Partial | Directional and local maps have distinct budgets and focused projections. A streaming cascade/atlas allocator is not present. |
+| Hardware stencil-volume local lighting | Live | Main depth is D32S8. Instanced local-light bounds run a z-fail front/back increment/decrement volume pass, and the additive local-light resolve is rejected outside nonzero stencil. Directional/ambient lighting remains a single full-screen pass. |
+| Noiseless shadow projection plus contact detail | Live + Reference | Cached raster shadow maps are combined with material/depth-aware screen-space contact visibility without a noisy temporal dependency. |
+| AO/bent-normal/specular occlusion | Live + Reference | Live lighting derives stable screen-space/contact visibility from resolved D32, normals and material data; material cavity and bent-normal contracts feed specular occlusion. CPU debug views expose the individual terms. |
+| Probe/RSM world-space GI | Reference / architecture only | The CPU renderer has probe-like indirect response and the graph no longer pretends a separate live GPU probe pass exists. A live RSM/probe streaming system is not implemented. |
 
-## Shadows, lighting, and reflections
+## Reflections, atmosphere, and post
 
-| Transcript requirement | Status | Implementation |
+| Requirement | Status | Evidence |
 |---|---|---|
-| Perspective/local shadow maps sized to relevant light bounds | Live | Spot-light shadow cameras use reverse-Z perspective projection and per-light range/FOV. |
-| Directional shadow bounds focus on relevant scene/camera geometry | Live | The directional shadow camera derives focused bounds from nearby scene vertices. |
-| Cache static shadow maps and avoid rendering ground/floor casters | Live + Contract | Directional/local cache flags prevent redundant updates; caster classification and validation exclude inappropriate floor/ground geometry. |
-| Restrict local lighting/shadow evaluation to useful pixels | Live + Contract | Depth/Hi-Z, range/cone rejection, local shadow arrays, contact shadows, and graph stencil-light contracts bound work. The current wgpu path emulates the restriction in shader logic because it has no D24S8 stencil volume pass. |
-| Albedo-independent lighting signal and material-aware resolve | Live + Reference | The CPU path separates irradiance before albedo. Live lighting stores material-independent diffuse illuminance in HDR alpha for exposure reduction while RGB retains the resolved material response. |
-| AO/bent-normal and material-depth contact shadowing without mandatory TAA | Live + Reference | Depth/normal/PBR inputs drive deterministic SSAO/contact logic; debug contracts expose both independently. |
-| SSR first at half resolution, software tracing only as a supplement, cubemap/sky fallback last | Live | Half-resolution SSR dispatch precedes 70%-resolution software reflection supplementation and fallback sampling. |
-| Two-frame reflection history with motion/roughness rejection | Live | Ping-pong reflection history uses current motion and roughness rejection. |
-| Flag SSR when it costs more than software RT | Reference + Contract | CPU pass reports and profiler policy emit the warning; live timestamp-query reporting remains future backend instrumentation. |
+| SSR first, software world-space tracing second, sky/proxy fallback last | Live | Half-resolution SSR precedes 70% software reflection supplementation and proxy/sky fallback. |
+| Two-frame reflection history with rejection | Live | Reflection history ping-pongs and rejects by motion, depth, and roughness. |
+| Warn when SSR is slower than software tracing | Reference + live measurement | The production gate evaluates CPU-reference reports. `--profile-gpu` now emits real GPU stage timestamps; individual SSR/software queries remain a finer-grained future split. |
+| Half-resolution blue-noise fog | Live + Reference | Compute fog runs at half resolution and is bilinearly merged during tone mapping. |
+| Depth-tested world-space rain and reactive wetness | Live | Instanced rain prisms use resolved reverse-Z depth and shared light/shadow/weather data. Wet materials, impacts, and reflections use the same field. |
+| Diffuse-only exposure, bounded white balance, artist compensation, temporal adaptation | Live | Ping-pong 1x1 exposure history uses diffuse illuminance from HDR alpha, artist min/max/EV/balance controls, separate brighten/darken rates, and measured frame rate. |
+| GT toe/linear/shoulder mapping and Kawase bloom after velocity compensation | Live + Reference | Bloom extracts from the velocity-compensated HDR scene and the GT resolve merges bloom, fog, exposure, white balance, and camera effects. |
+| Single-direction depth-aware velocity compensation with separable smoothing | Live | Native-resolution motion/depth reconstruction uses a near-field camera cutoff, extreme-motion fallback, one-sided uniform samples, foreground rejection, and a separate perpendicular smoothing pass. Artist controls are CLI-exposed. |
+| Half-resolution composite effects | Live | A dedicated half-resolution RGBA16 camera-effects target produces light-reactive lens rain/refraction and is bilinearly composed in the tone-map pass. |
+| Separate UI target and gamma-correct presentation | Live | SMAA writes an intermediate scene target; UI writes a separate linear RGBA8 target; the final pass composites premultiplied UI and applies user `--display-gamma`/`--display-brightness`. UI never contaminates temporal history. |
+| Depth of field | Research | The transcript says DoF still needs work and supplies no validated tuning/quality policy. No placeholder blur is mislabeled as completion. |
+| 64-pixel 3D LUT and BT.2020 experiments | Research | The source asks for later format/color-space experiments; the SDR path does not claim them. |
 
-## Atmosphere and post processing
+## Anti-aliasing
 
-| Transcript requirement | Status | Implementation |
+| Requirement | Status | Evidence |
 |---|---|---|
-| Half-resolution blue-noise volumetric fog | Live + Reference | Compute fog runs at half resolution and is bilinearly composited during tone mapping. |
-| Depth-tested volumetric rain and lighting-reactive wet surfaces | Live | Instanced rain prisms depth-test against reverse-Z and share the weather/light/shadow field with impacts, puddles, and reflections. |
-| Half/quarter-resolution composite effects rather than native full-screen effect buffers | Live | SSR/fog are half resolution; bloom is quarter resolution and merged with fog in the tone-map resolve. |
-| Kawase-style bloom with no needless output clear | Live + Reference | Extract and separable blur overwrite reusable reduced-resolution targets and resolve with tone mapping. |
-| GT-style toe/linear/shoulder tone curve | Live + Reference | WGSL and native kernel implementations share the same curve family. |
-| Diffuse-only auto-exposure and automated white balance with artist bounds/bias | Live | A one-workgroup reduction computes geometric-mean exposure from material-independent diffuse illuminance, excludes emissive/specular color, derives bounded white-balance gains from scene illuminants, and feeds the GT resolve. Exposure and balance ranges are deliberately bounded; per-scene artist bias is not yet exposed. |
-| 64-pixel 3D LUT and BT.2020 experiments | Research | The transcript asks for later format/color-space testing. No arbitrary LUT is shipped as if validated. |
-| Depth-of-field architecture | Research | The transcript describes near/far half-resolution buffers but leaves quality policy and tuning unresolved; the demo does not implement cinematic DoF. |
+| SMAA edge and blend stages | Live + Reference | Dedicated RG8 edge and RGBA16 blend targets are inspectable independently. |
+| SMAA S2x/MSAA coverage integration | Live | Custom 2x coverage feeds edge detection, so partially covered geometry becomes a spatial edge even when luma contrast is weak. |
+| T2x uses exactly the previous spatial result | Live + Reference | History stores current spatial SMAA, never the temporally blended presentation. Only detected edges accept history. |
+| Motion/reprojection and responsive rejection | Live + Reference | Base-pass RG16 motion drives history lookup/rejection. Responsive materials reject temporal history. |
+| Infinite TAA accumulation or temporal texture supersampling | Deliberately absent | The implementation preserves non-edge texture clarity and does not accumulate an indefinite history. |
 
-## Anti-aliasing and motion
+## Workflow, profiling, and debugability
 
-| Transcript requirement | Status | Implementation |
+| Requirement | Status | Evidence |
 |---|---|---|
-| SMAA edge detection and blend stages with independently inspectable edge data | Live + Reference | Dedicated edge and blend targets/passes exist; tests and debug coverage ensure detectable output. |
-| T2x uses only the immediately previous spatial SMAA frame, never an accumulated temporal result | Live + Reference | The AA shader writes `spatial_resolve` to history and only uses the previous history texture for presentation. CPU persistence similarly stores the unblended current frame. |
-| Temporal work only enhances detected edges | Live + Reference | Both paths gate history blending by the SMAA/custom edge mask; non-edge texture detail is not temporally accumulated. |
-| Motion vectors are produced in the base pass and used for reprojection/rejection | Live | RG16 motion is cleared each frame, written with G-buffer material outputs, and consumed by reflection and AA history. |
-| Responsive masks for unstable particles/effects | Live + Reference | `MaterialFlags::responsive_aa` is packed into the normal/material flag channel; live and CPU T2x paths reject history on flagged pixels. Emissive demo materials opt in. |
-| Programmable sample-location SMAA/MSAA hybrid and saved coverage history | Research | The speaker explicitly presents this as an early proposal requiring further R&D. wgpu also does not expose portable programmable sample locations. |
-| Single-direction, depth-aware velocity compensation with separable smoothing | Research | The transcript explicitly says sample count, trail length, tiling, and plausibility require dedicated R&D. No conventional symmetric blur is substituted and mislabeled as complete. |
+| Named resources/passes with formats, scales, samples, dependencies, histories, and budgets | Contract | `RenderGraph` models these fields, including multisample count, and architecture tests validate the real live order. |
+| GPU timing | Live | `--profile-gpu` enables adapter timestamp features, brackets six renderer stages, reads results back, and prints milliseconds. Unsupported adapters return an explicit error. |
+| Debug views for depth, normals, material IDs, motion, shadows, AO, reflections, coverage, overdraw, topology, light volumes, and history | Reference + Contract | `DebugView::ALL`, required-view gates, gallery output, and renderer tests cover the declared set. Live capture verifies final presentation; a live interactive G-buffer selector is not claimed. |
+| Artist controls | Live + Contract | Exposure bounds/EV, white-balance strength, velocity strength/cutoff, display gamma, and brightness are CLI-exposed. Import reports expose texture/topology/shadow/prepass budgets. |
+| Cross-API/vendor performance claims | Out of scope | The renderer reports the selected wgpu backend and adapter but does not turn observations from other engines into universal claims. |
+| Marketing scripts, Patreon instructions, and consumer advocacy | Out of scope | These are not engine behavior. |
 
-## Tooling, validation, and non-applicable material
+## Remaining production work
 
-| Transcript requirement | Status | Implementation |
-|---|---|---|
-| Named graph resources/passes, formats, scales, dependencies, history and budgets | Contract | `RenderGraph` models and validates these fields; the baseline architecture test guards it. |
-| Debug views for depth, normals, material data, overdraw, topology, shadows, reflections, AA and history | Reference + Contract | `DebugView`, profiler required-view coverage, and tests enumerate and render the complete declared set. |
-| Asset and pass warnings for known anti-patterns | Contract | The profiler and asset pipeline flag excess textures, alpha prepass, bad clears, floor shadows, missing reflection proxies, and incomplete debug coverage. |
-| D3D11/D3D12/Vulkan comparisons and vendor marketing claims | Not applicable | This renderer uses wgpu's available backend and does not encode unverified cross-API performance claims. |
-| Marketing templates, Patreon/chart instructions, consumer advocacy, and studio policy commentary | Not applicable | These are not engine behavior. |
+These are real gaps, not hidden behind pass names:
 
-## Open production gaps
+1. Runtime streaming LOD selection with synchronized base/shadow Bayer fades.
+2. A production probe/RSM GI streaming system and measured live comparison.
+3. A full scalable directional cascade/atlas allocator with distance-driven map sizes.
+4. Per-pass timestamp granularity for direct SSR-versus-software-RT comparison.
+5. Interactive live debug-target selection rather than reference/gallery-only views.
 
-The following are the only transcript-derived items that should be described as
-unfinished production work rather than shipped behavior:
-
-1. Per-scene artist temperature bias and temporally smoothed eye-adaptation
-   controls on top of the live bounded auto-exposure/white-balance result.
-2. Native GPU timestamp/pipeline-statistics capture that can compare live SSR
-   and software tracing cost instead of relying on the reference profiler.
-3. A complete runtime LOD system with synchronized base/shadow dithered fades.
-
-The motion-blur, programmable-sample-location, 3D-LUT/BT.2020, DoF, occlusion
-culling, and several MSAA proposals stay in the research tier because the
-source itself does not define a validated production result. They require
-measured research, not placeholder effects.
+The transcript's programmable sample-location layout, DoF policy, wide-gamut LUT
+format, advanced eye model, and final subsurface approach remain research because
+the source itself does not settle them.

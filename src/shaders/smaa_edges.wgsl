@@ -7,6 +7,7 @@ struct AntiAlias {
 @group(0) @binding(0) var current_color: texture_2d<f32>;
 @group(0) @binding(1) var scene_depth: texture_depth_2d;
 @group(0) @binding(2) var<uniform> aa: AntiAlias;
+@group(0) @binding(3) var sample_coverage: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -55,6 +56,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let down_depth = load_depth(pixel + vec2<i32>(0, 1), size);
     let color_threshold = aa.params.y;
     let depth_threshold = 0.0018;
+    let coverage = textureLoad(sample_coverage, pixel, 0).r;
+    let coverage_edge = 1.0 - abs(coverage * 2.0 - 1.0);
     let horizontal_edge = max(
         smoothstep(color_threshold, color_threshold * 2.5, abs(center_luma - right_luma)),
         smoothstep(depth_threshold, depth_threshold * 5.0, abs(center_depth - right_depth))
@@ -63,5 +66,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         smoothstep(color_threshold, color_threshold * 2.5, abs(center_luma - down_luma)),
         smoothstep(depth_threshold, depth_threshold * 5.0, abs(center_depth - down_depth))
     );
-    return vec4<f32>(horizontal_edge, vertical_edge, 0.0, 1.0);
+    return vec4<f32>(max(horizontal_edge, coverage_edge), max(vertical_edge, coverage_edge), coverage_edge, 1.0);
 }

@@ -21,6 +21,11 @@ struct LocalShadowCameras {
     view_projection: array<mat4x4<f32>, 6>,
 };
 
+struct MaterialProfiles {
+    dielectric: array<vec4<f32>, 256>,
+    conductor: array<vec4<f32>, 256>,
+};
+
 @group(0) @binding(0) var albedo: texture_2d<f32>;
 @group(0) @binding(1) var normals: texture_2d<f32>;
 @group(0) @binding(2) var pbr: texture_2d<f32>;
@@ -35,6 +40,7 @@ struct LocalShadowCameras {
 @group(0) @binding(11) var<uniform> local_shadow_cameras: LocalShadowCameras;
 @group(0) @binding(12) var skybox: texture_2d<f32>;
 @group(0) @binding(13) var skybox_sampler: sampler;
+@group(0) @binding(14) var<uniform> material_profiles: MaterialProfiles;
 const RAIN_GRID_X: u32 = 64u;
 const RAIN_GRID_Z: u32 = 64u;
 const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-18.5, 0.14, -82.0);
@@ -468,9 +474,12 @@ fn shade_light(
     surface: vec4<f32>,
     wetness: f32,
     light_direction: vec3<f32>,
-    radiance: vec3<f32>
+    radiance: vec3<f32>,
+    material_profile_id: u32,
+    material_class: u32
 ) -> vec3<f32> {
-    let ndotl = max(dot(normal, light_direction), 0.0);
+    let raw_ndotl = dot(normal, light_direction);
+    var ndotl = max(raw_ndotl, 0.0);
     let ndotv = max(dot(normal, view_direction), 0.0);
     let roughness = max(surface.x, 0.04);
     let half_direction = safe_normalize(light_direction + view_direction);
@@ -478,8 +487,14 @@ fn shade_light(
     let fd90 = 0.5 + 2.0 * ldoth * ldoth * roughness;
     let light_scatter = 1.0 + (fd90 - 1.0) * pow5(1.0 - ndotl);
     let view_scatter = 1.0 + (fd90 - 1.0) * pow5(1.0 - ndotv);
+    let dielectric_profile = material_profiles.dielectric[material_profile_id];
+    let conductor_profile = material_profiles.conductor[material_profile_id];
+    if material_class == 3u {
+        ndotl = clamp((raw_ndotl + 0.34) / 1.34, 0.0, 1.0);
+    }
+    let diffuse_weight = mix(dielectric_profile.a, conductor_profile.a, surface.y);
     let diffuse = base
-        * vec3<f32>(1.0 - surface.y)
+        * vec3<f32>(diffuse_weight)
         * ndotl
         * light_scatter
         * view_scatter
@@ -487,12 +502,23 @@ fn shade_light(
         * (1.0 - wetness * 0.38);
     let ndoth = max(dot(normal, half_direction), 0.0);
     let specular_power = mix(220.0, 9.0, roughness);
-    var f0 = mix(vec3<f32>(0.04), base, vec3<f32>(surface.y));
+    var f0 = mix(dielectric_profile.rgb, conductor_profile.rgb, vec3<f32>(surface.y));
     f0 = mix(f0, vec3<f32>(0.075), wetness * (1.0 - surface.y));
     let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(normal, view_direction), 0.0), 5.0);
     let specular_occlusion = clamp(pow(ndotv + surface.z, exp2(-16.0 * roughness - 1.0)) - 1.0 + surface.z, 0.0, 1.0);
-    let specular = pow(ndoth, specular_power) * fresnel * ndotl * specular_occlusion * (1.0 + wetness * 1.7);
-    return (diffuse + specular) * radiance;
+    var specular = pow(ndoth, specular_power) * fresnel * ndotl * specular_occlusion * (1.0 + wetness * 1.7);
+    if material_class == 4u {
+        let tangent_seed = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(normal.y) > 0.94);
+        let strand_tangent = safe_normalize(cross(tangent_seed, normal));
+        let longitudinal = pow(max(abs(dot(half_direction, strand_tangent)), 0.0), mix(48.0, 9.0, roughness));
+        specular += conductor_profile.rgb * longitudinal * ndotl * (0.24 + conductor_profile.a * 0.46);
+    }
+    var transmission = vec3<f32>(0.0);
+    if material_class == 3u || material_class == 2u {
+        let back_scatter = pow(max(-raw_ndotl, 0.0), 2.0) * conductor_profile.a;
+        transmission = base * vec3<f32>(1.0, 0.42, 0.30) * back_scatter * surface.z;
+    }
+    return (diffuse + specular + transmission) * radiance;
 }
 
 
@@ -526,6 +552,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let normal = normalize(normal_flags.xyz);
     let material_flags = u32(round(normal_flags.w));
     let glass_mask = f32(material_flags & 1u);
+    let material_profile_id = (material_flags >> 3u) & 255u;
+    let profile_meta = material_profiles.conductor[material_profile_id].a;
+    var material_class = 0u;
+    if profile_meta > 0.60 { material_class = 4u; }
+    else if profile_meta > 0.28 { material_class = 3u; }
+    else if profile_meta > 0.08 { material_class = 2u; }
     let world_position = reconstruct_world_position(input.uv, scene_depth);
     let wetness = rain_wetness(world_position, normal, surface_raw, camera.position_time.w);
     let impact = procedural_rain_impacts(world_position, normal, surface_raw, camera.position_time.w);
@@ -568,75 +600,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             lights.directional_color_intensity.rgb * lights.directional_color_intensity.w * sun_shadow * directional_contact;
         diffuse_illuminance += luminance(directional_radiance)
             * max(dot(normal, light_direction), 0.0) * contact_visibility;
-        hdr += shade_light(base, normal, view_direction, effective_surface, wetness, light_direction, directional_radiance)
+        hdr += shade_light(base, normal, view_direction, effective_surface, wetness, light_direction, directional_radiance, material_profile_id, material_class)
             * contact_visibility;
-    }
-    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
-    for (var light_index = 0u; light_index < local_count; light_index += 1u) {
-        let position_radius = lights.local_position_radius[light_index];
-        let to_light = position_radius.xyz - world_position;
-        let distance_to_light = length(to_light);
-        let color_intensity = lights.local_color_intensity[light_index];
-        if color_intensity.w <= 0.0 || distance_to_light >= position_radius.w {
-            continue;
-        }
-        let local_direction = to_light / max(distance_to_light, 0.0001);
-        let light_to_surface = -local_direction;
-        let attenuation = pow(clamp(1.0 - distance_to_light / position_radius.w, 0.0, 1.0), 2.0);
-        if attenuation <= 0.0001 {
-            continue;
-        }
-        let cone = spot_cone_attenuation(light_index, light_to_surface);
-        if lights.local_inner_shadow[light_index].w > 0.5 && cone <= 0.0001 {
-            continue;
-        }
-        let spot = practical_spot_fill(light_index, cone);
-        let local_shadow_weight = practical_spot_shadow_weight(light_index, cone);
-        var local_shadow = 1.0;
-        if local_shadow_weight > 0.001 {
-            local_shadow = mix(
-                1.0,
-                local_shadow_visibility(world_position, normal, light_index),
-                local_shadow_weight
-            );
-        }
-        let shadowed_region_lift = 1.0 + (1.0 - sun_shadow) * 0.12;
-        let local_contact = screen_space_contact_shadow(
-            pixel,
-            world_position,
-            normal,
-            local_direction,
-            clamp(distance_to_light * 0.42, 0.42, 1.45),
-            0.46
-        );
-        let local_radiance =
-            color_intensity.rgb * color_intensity.w * attenuation * spot * local_shadow * local_contact * shadowed_region_lift;
-        diffuse_illuminance += luminance(local_radiance)
-            * max(dot(normal, local_direction), 0.0) * contact_visibility;
-        hdr += shade_light(base, normal, view_direction, effective_surface, wetness, local_direction, local_radiance)
-            * contact_visibility;
-        let opposite_side_fill = 1.0 + (1.0 - max(dot(normal, local_direction), 0.0)) * 0.50;
-        let local_bounce = base
-            * color_intensity.rgb
-            * color_intensity.w
-            * attenuation
-            * spot
-            * (0.076 + wetness * 0.062)
-            * (1.0 - surface_raw.y)
-            * (1.0 - emissive_mask)
-            * ssao
-            * shadowed_region_lift
-            * opposite_side_fill;
-        hdr += local_bounce;
-        let local_rim = color_intensity.rgb
-            * color_intensity.w
-            * attenuation
-            * spot
-            * pow(1.0 - max(dot(normal, view_direction), 0.0), 2.0)
-            * (0.014 + wetness * 0.022)
-            * (1.0 - emissive_mask)
-            * shadowed_region_lift;
-        hdr += local_rim;
     }
     hdr += albedo_sample.rgb * emissive_strength;
     let surface_fresnel = 0.035 + pow(1.0 - max(dot(normal, view_direction), 0.0), 5.0) * 0.72;
@@ -670,4 +635,55 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let vignette_distance = distance(input.uv, vec2<f32>(0.5));
     let vignette = 1.0 - smoothstep(0.42, 0.78, vignette_distance) * 0.42;
     return vec4<f32>(max(hdr * vignette, vec3<f32>(0.0)), diffuse_illuminance);
+}
+
+@fragment
+fn fs_local_lights(input: VertexOutput) -> @location(0) vec4<f32> {
+    let size = textureDimensions(albedo);
+    let pixel = min(vec2<u32>(input.position.xy), size - vec2<u32>(1u));
+    let scene_depth = textureLoad(depth, vec2<i32>(pixel), 0);
+    if scene_depth <= 0.00001 {
+        discard;
+    }
+    let surface = textureLoad(pbr, vec2<i32>(pixel), 0);
+    let normal_flags = textureLoad(normals, vec2<i32>(pixel), 0);
+    let normal = normalize(normal_flags.xyz);
+    let material_flags = u32(round(normal_flags.w));
+    let material_profile_id = (material_flags >> 3u) & 255u;
+    let profile_meta = material_profiles.conductor[material_profile_id].a;
+    var material_class = 0u;
+    if profile_meta > 0.60 { material_class = 4u; }
+    else if profile_meta > 0.28 { material_class = 3u; }
+    else if profile_meta > 0.08 { material_class = 2u; }
+    let world_position = reconstruct_world_position(input.uv, scene_depth);
+    let base = textureLoad(albedo, vec2<i32>(pixel), 0).rgb;
+    let view_direction = safe_normalize(camera.position_time.xyz - world_position);
+    let wetness = rain_wetness(world_position, normal, surface, camera.position_time.w);
+    let water_coverage = clamp(wetness, 0.0, 1.0);
+    let effective_surface = vec4<f32>(mix(surface.x, 0.022, water_coverage * 0.88), surface.yzw);
+    let contact_visibility = mix(screen_space_occlusion(pixel, world_position, normal), 1.0, 0.16);
+    let light_direction = safe_normalize(lights.directional_direction_count.xyz);
+    let sun_shadow = shadow_visibility(world_position, normal, light_direction);
+    var local_hdr = vec3<f32>(0.0);
+    var local_diffuse = 0.0;
+    let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
+    for (var light_index = 0u; light_index < local_count; light_index += 1u) {
+        let position_radius = lights.local_position_radius[light_index];
+        let to_light = position_radius.xyz - world_position;
+        let distance_to_light = length(to_light);
+        let color_intensity = lights.local_color_intensity[light_index];
+        if color_intensity.w <= 0.0 || distance_to_light >= position_radius.w { continue; }
+        let local_direction = to_light / max(distance_to_light, 0.0001);
+        let attenuation = pow(clamp(1.0 - distance_to_light / position_radius.w, 0.0, 1.0), 2.0);
+        let cone = spot_cone_attenuation(light_index, -local_direction);
+        if lights.local_inner_shadow[light_index].w > 0.5 && cone <= 0.0001 { continue; }
+        let spot = practical_spot_fill(light_index, cone);
+        let shadow_weight = practical_spot_shadow_weight(light_index, cone);
+        let shadow = mix(1.0, local_shadow_visibility(world_position, normal, light_index), shadow_weight);
+        let contact = screen_space_contact_shadow(pixel, world_position, normal, local_direction, clamp(distance_to_light * 0.42, 0.42, 1.45), 0.46);
+        let radiance = color_intensity.rgb * color_intensity.w * attenuation * spot * shadow * contact * (1.0 + (1.0 - sun_shadow) * 0.12);
+        local_hdr += shade_light(base, normal, view_direction, effective_surface, wetness, local_direction, radiance, material_profile_id, material_class) * contact_visibility;
+        local_diffuse += luminance(radiance) * max(dot(normal, local_direction), 0.0) * contact_visibility;
+    }
+    return vec4<f32>(max(local_hdr, vec3<f32>(0.0)), max(local_diffuse, 0.0));
 }

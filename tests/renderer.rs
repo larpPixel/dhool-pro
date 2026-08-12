@@ -556,9 +556,12 @@ fn live_gpu_uses_scene_camera_fov_and_clip_distance() {
     assert!(!gpu.contains("CompareFunction::LessEqual"));
 
     let aa_shader = include_str!("../src/shaders/aa.wgsl");
-    assert!(aa_shader.contains("apply_fps_overlay"));
-    assert!(aa_shader.contains("fps_overlay_coverage"));
-    assert!(aa_shader.contains("aa.params.w"));
+    let ui_shader = include_str!("../src/shaders/ui_overlay.wgsl");
+    let present_shader = include_str!("../src/shaders/present.wgsl");
+    assert!(!aa_shader.contains("overlay"));
+    assert!(ui_shader.contains("glyph_coverage"));
+    assert!(ui_shader.contains("aa.params.w"));
+    assert!(present_shader.contains("display_gamma"));
 }
 
 #[test]
@@ -770,7 +773,10 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     assert!(lighting_shader.contains("distance_to_light >= position_radius.w"));
     assert!(lighting_shader.contains("outer_halo"));
     assert!(lighting_shader.contains("spot_presence"));
-    assert!(lighting_shader.contains("local_shadow_weight > 0.001"));
+    assert!(lighting_shader.contains("let shadow_weight = practical_spot_shadow_weight"));
+    assert!(lighting_shader.contains("fs_local_lights"));
+    assert!(gpu.contains("local-light-z-fail-stencil-volumes"));
+    assert!(gpu.contains("stencil-restricted-local-lighting"));
     assert!(ssr_shader.contains("fn surface_direct_radiance"));
     assert!(!reflection_shader.contains("fn trace_alley_proxy"));
     assert!(!reflection_shader.contains("proxy_emissive_radiance"));
@@ -782,7 +788,7 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     assert!(tonemap_shader.contains("gt_tonemap"));
     assert!(gpu.contains("diffuse-luminance-auto-exposure-white-balance"));
     assert!(exposure_shader.contains("texture_storage_2d<rgba16float, write>"));
-    assert!(exposure_shader.contains("0.18 / max(geometric_mean"));
+    assert!(exposure_shader.contains("0.18 * compensation / max(geometric_mean"));
     assert!(exposure_shader.contains("vec3<f32>(0.78)"));
     assert!(tonemap_shader.contains("exposure_white_balance"));
 }
@@ -809,7 +815,8 @@ fn live_gpu_uses_motion_smaa_stages_and_shadow_cache_flags() {
     assert!(gpu.contains("blue-noise-volumetric-fog"));
     assert!(gpu.contains("shadow_cache_ready"));
     assert!(gpu.contains("local_shadow_cache_ready"));
-    assert!(gpu.contains("load_color_attachment(&self.gbuffer.albedo)"));
+    assert!(gpu.contains("load_color_attachment(&self.gbuffer.albedo_ms)"));
+    assert!(gpu.contains("2x-msaa-gbuffer-custom-coverage-resolve"));
     assert!(geometry_shader.contains("@location(3) motion_vectors"));
     assert!(aa_shader.contains("@group(0) @binding(5) var motion_vectors"));
     assert!(aa_shader.contains("@group(0) @binding(6) var smaa_blend"));
@@ -818,7 +825,8 @@ fn live_gpu_uses_motion_smaa_stages_and_shadow_cache_flags() {
     assert!(aa_shader.contains("let spatial_resolve = smaa_resolve"));
     assert!(aa_shader.contains("edge_strength > 0.0001"));
     assert!(aa_shader.contains("vec4<f32>(spatial_resolve, edge_strength)"));
-    assert!(!aa_shader.contains("vec4<f32>(resolved, 1.0)"));
+    assert!(aa_shader.contains("vec4<f32>(resolved, 1.0)"));
+    assert!(!aa_shader.contains("fps_overlay"));
     assert!(tonemap_shader.contains("@group(0) @binding(2) var volumetric_fog"));
     assert!(gpu.contains("reflection-proxy-uniform"));
     assert!(gpu.contains("MAX_REFLECTION_PROXIES"));

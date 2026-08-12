@@ -127,4 +127,8 @@ impl<T> Arena<T> {
             .filter(|slot| slot.value.is_some())
             .count()
     }
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.slots.iter().filter_map(|slot| slot.value.as_ref())
+    }
 }

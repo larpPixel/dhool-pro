@@ -18,6 +18,7 @@ struct Material {
 @group(1) @binding(2) var base_color_sampler: sampler;
 @group(1) @binding(3) var normal_texture: texture_2d<f32>;
 @group(1) @binding(4) var pbr_texture: texture_2d<f32>;
+@group(1) @binding(5) var opacity_texture: texture_2d<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -65,6 +66,13 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 fn fs_main(input: VertexOutput) -> GBufferOutput {
     var output: GBufferOutput;
     let sampled = textureSample(base_color_texture, base_color_sampler, input.uv);
+    let material_flags = u32(round(material.surface.w));
+    if (material_flags & 4u) != 0u {
+        let opacity = textureSample(opacity_texture, base_color_sampler, input.uv).r;
+        if opacity < 0.5 {
+            discard;
+        }
+    }
     let sampled_normal = textureSample(normal_texture, base_color_sampler, input.uv).xyz * 2.0 - 1.0;
     let sampled_pbr = textureSample(pbr_texture, base_color_sampler, input.uv);
     let geometric_normal = normalize(input.normal);

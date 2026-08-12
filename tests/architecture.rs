@@ -20,6 +20,50 @@ fn baseline_frame_graph_obeys_spec_constraints() {
     assert_eq!(graph.validate(), Vec::new());
     assert!(graph.pass_count() >= 8);
     assert!(graph.resource_count() >= 10);
+    let pass_names: Vec<_> = graph
+        .passes()
+        .iter()
+        .map(|pass| pass.name.as_str())
+        .collect();
+    for required in [
+        "2x-msaa-gbuffer-custom-coverage-resolve",
+        "local-light-z-fail-stencil-volumes",
+        "stencil-restricted-local-lighting",
+        "single-direction-depth-aware-velocity-compensation",
+        "half-resolution-camera-composite-effects",
+        "smaa-t2x-motion-vector-resolve",
+        "separate-linear-ui-overlay",
+        "gamma-correct-scene-ui-presentation",
+    ] {
+        assert!(pass_names.contains(&required), "missing {required}");
+    }
+    assert!(graph
+        .resources()
+        .any(|resource| resource.name == "2x-msaa-hardware-depth" && resource.sample_count == 2));
+    assert!(graph.resources().any(|resource| {
+        resource.name == "half-resolution-camera-composite-effects"
+            && resource.width_scale == 0.5
+            && resource.height_scale == 0.5
+    }));
+}
+
+#[test]
+fn live_shader_contract_contains_real_coverage_stencil_and_history_paths() {
+    let resolve = include_str!("../src/shaders/gbuffer_resolve.wgsl");
+    assert!(resolve.contains("texture_multisampled_2d"));
+    assert!(resolve.contains("sample_coverage"));
+
+    let lighting = include_str!("../src/shaders/lighting.wgsl");
+    assert!(lighting.contains("fs_local_lights"));
+    assert!(lighting.contains("material_profiles"));
+
+    let aa = include_str!("../src/shaders/aa.wgsl");
+    assert!(aa.contains("spatial_resolve"));
+    assert!(!aa.contains("fps_overlay"));
+
+    let presentation = include_str!("../src/shaders/present.wgsl");
+    assert!(presentation.contains("display_gamma"));
+    assert!(presentation.contains("ui_overlay"));
 }
 
 #[test]

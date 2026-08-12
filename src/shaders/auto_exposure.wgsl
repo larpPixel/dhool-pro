@@ -10,9 +10,23 @@ struct Lights {
     local_inner_shadow: array<vec4<f32>, 6>,
 };
 
+struct ExposureSettings {
+    limits_compensation_balance: vec4<f32>,
+    adaptation_speeds: vec4<f32>,
+};
+
+struct AntiAlias {
+    previous_view_projection: mat4x4<f32>,
+    viewport: vec4<f32>,
+    params: vec4<f32>,
+};
+
 @group(0) @binding(0) var lighting_hdr: texture_2d<f32>;
 @group(0) @binding(1) var exposure_white_balance: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var<uniform> lights: Lights;
+@group(0) @binding(3) var previous_calibration: texture_2d<f32>;
+@group(0) @binding(4) var<uniform> settings: ExposureSettings;
+@group(0) @binding(5) var<uniform> frame_timing: AntiAlias;
 
 var<workgroup> log_luminance: array<f32, 64>;
 
@@ -52,7 +66,13 @@ fn cs_main(
 
     if local_index == 0u {
         let geometric_mean = exp(log_luminance[0] / 64.0);
-        let exposure = clamp(0.18 / max(geometric_mean, 0.0001), 0.35, 3.5);
+        let exposure_limits = settings.limits_compensation_balance.xy;
+        let compensation = exp2(settings.limits_compensation_balance.z);
+        let target_exposure = clamp(
+            0.18 * compensation / max(geometric_mean, 0.0001),
+            exposure_limits.x,
+            exposure_limits.y
+        );
 
         var illuminant = lights.ambient.rgb + lights.sky.rgb * 0.35;
         illuminant += lights.directional_color_intensity.rgb
@@ -63,7 +83,24 @@ fn cs_main(
                 * lights.local_color_intensity[index].w * 0.12;
         }
         let neutral = max(luminance(illuminant), 0.0001);
-        let gains = clamp(vec3<f32>(neutral) / max(illuminant, vec3<f32>(0.0001)), vec3<f32>(0.78), vec3<f32>(1.28));
+        let target_gains = clamp(
+            vec3<f32>(neutral) / max(illuminant, vec3<f32>(0.0001)),
+            vec3<f32>(0.78),
+            vec3<f32>(1.28)
+        );
+        let balance_strength = settings.limits_compensation_balance.w;
+        let balanced_target = mix(vec3<f32>(1.0), target_gains, balance_strength);
+        let previous = textureLoad(previous_calibration, vec2<i32>(0), 0);
+        let has_history = previous.a > 0.0001;
+        let fps = max(frame_timing.params.w, 1.0);
+        let speed = select(
+            settings.adaptation_speeds.y,
+            settings.adaptation_speeds.x,
+            target_exposure > previous.a
+        );
+        let adaptation = 1.0 - exp(-speed / fps);
+        let exposure = select(target_exposure, mix(previous.a, target_exposure, adaptation), has_history);
+        let gains = select(balanced_target, mix(previous.rgb, balanced_target, adaptation), has_history);
         textureStore(exposure_white_balance, vec2<i32>(0), vec4<f32>(gains, exposure));
     }
 }

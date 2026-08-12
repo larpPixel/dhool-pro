@@ -11,6 +11,15 @@ fn main() {
         let map = option_value(&args, "--map");
         let max_frames = option_value(&args, "--frames").and_then(|value| value.parse().ok());
         let capture_path = option_value(&args, "--capture").map(Into::into);
+        let exposure_min = option_f32(&args, "--exposure-min", 0.35);
+        let exposure_max = option_f32(&args, "--exposure-max", 3.5);
+        let exposure_compensation = option_f32(&args, "--exposure-compensation", 0.0);
+        let white_balance_strength = option_f32(&args, "--white-balance-strength", 1.0);
+        let velocity_compensation_strength = option_f32(&args, "--velocity-strength", 0.65);
+        let camera_velocity_cutoff = option_f32(&args, "--velocity-cutoff", 8.0);
+        let display_gamma = option_f32(&args, "--display-gamma", 2.2);
+        let display_brightness = option_f32(&args, "--display-brightness", 1.0);
+        let profile_gpu = args.iter().any(|arg| arg == "--profile-gpu");
         if let Err(error) = run_live_renderer(LiveOptions {
             asset: asset.into(),
             map,
@@ -18,6 +27,15 @@ fn main() {
             width: 1280,
             height: 720,
             capture_path,
+            exposure_min,
+            exposure_max,
+            exposure_compensation,
+            white_balance_strength,
+            velocity_compensation_strength,
+            camera_velocity_cutoff,
+            display_gamma,
+            display_brightness,
+            profile_gpu,
         }) {
             eprintln!("live renderer failed: {error}");
             std::process::exit(2);
@@ -118,6 +136,12 @@ fn option_value(args: &[String], option: &str) -> Option<String> {
         .position(|arg| arg == option)
         .and_then(|index| args.get(index + 1))
         .cloned()
+}
+
+fn option_f32(args: &[String], option: &str, default: f32) -> f32 {
+    option_value(args, option)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 #[cfg(target_os = "linux")]

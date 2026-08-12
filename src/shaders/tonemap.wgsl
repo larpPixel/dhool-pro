@@ -2,6 +2,7 @@
 @group(0) @binding(1) var bloom_tex: texture_2d<f32>;
 @group(0) @binding(2) var volumetric_fog: texture_2d<f32>;
 @group(0) @binding(3) var exposure_white_balance: texture_2d<f32>;
+@group(0) @binding(4) var composite_effects: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -84,13 +85,28 @@ fn sample_fog(uv: vec2<f32>) -> vec4<f32> {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+fn sample_composite(uv: vec2<f32>) -> vec4<f32> {
+    let size = textureDimensions(composite_effects);
+    let coord = uv * vec2<f32>(size) - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(coord));
+    let f = fract(coord);
+    let maximum = vec2<i32>(size) - vec2<i32>(1);
+    let a = textureLoad(composite_effects, clamp(base, vec2<i32>(0), maximum), 0);
+    let b = textureLoad(composite_effects, clamp(base + vec2<i32>(1, 0), vec2<i32>(0), maximum), 0);
+    let c = textureLoad(composite_effects, clamp(base + vec2<i32>(0, 1), vec2<i32>(0), maximum), 0);
+    let d = textureLoad(composite_effects, clamp(base + vec2<i32>(1, 1), vec2<i32>(0), maximum), 0);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(input.position.xy);
     let fog = sample_fog(input.uv);
     let lit = load_hdr(pixel) + sample_bloom(input.uv) * 0.30;
     let hdr = mix(lit, fog.rgb, clamp(fog.a, 0.0, 0.16));
+    let composite = sample_composite(input.uv);
+    let composited_hdr = mix(hdr, hdr + composite.rgb, clamp(composite.a, 0.0, 0.82));
     let calibration = textureLoad(exposure_white_balance, vec2<i32>(0), 0);
-    let calibrated_hdr = hdr * calibration.rgb * calibration.a;
+    let calibrated_hdr = composited_hdr * calibration.rgb * calibration.a;
     return vec4<f32>(gt_tonemap(max(calibrated_hdr, vec3<f32>(0.0))), 1.0);
 }

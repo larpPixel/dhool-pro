@@ -12,9 +12,11 @@ pub enum Format {
     R8Array,
     D24S8,
     D32,
+    D32S8,
     Rg11B10,
     Rgb10A2,
     Rg8,
+    R8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,6 +50,7 @@ pub struct ResourceDesc {
     pub kind: ResourceKind,
     pub width_scale: f32,
     pub height_scale: f32,
+    pub sample_count: u32,
 }
 
 impl ResourceDesc {
@@ -58,12 +61,18 @@ impl ResourceDesc {
             kind,
             width_scale: 1.0,
             height_scale: 1.0,
+            sample_count: 1,
         }
     }
 
     pub fn scaled(mut self, width_scale: f32, height_scale: f32) -> Self {
         self.width_scale = width_scale;
         self.height_scale = height_scale;
+        self
+    }
+
+    pub fn multisampled(mut self, sample_count: u32) -> Self {
+        self.sample_count = sample_count;
         self
     }
 }
@@ -225,6 +234,10 @@ pub enum GraphIssue {
         pass: String,
         scale: f32,
     },
+    InvalidSampleCount {
+        resource: String,
+        sample_count: u32,
+    },
     UnknownResource {
         pass: String,
         index: u32,
@@ -274,6 +287,10 @@ impl RenderGraph {
         self.resources.live_len()
     }
 
+    pub fn resources(&self) -> impl Iterator<Item = &ResourceDesc> {
+        self.resources.values()
+    }
+
     pub fn passes(&self) -> &[RenderPassDesc] {
         &self.passes
     }
@@ -281,6 +298,15 @@ impl RenderGraph {
     pub fn validate(&self) -> Vec<GraphIssue> {
         let mut issues = Vec::new();
         let mut pass_names = HashSet::new();
+
+        for resource in self.resources.values() {
+            if !matches!(resource.sample_count, 1 | 2 | 4 | 8) {
+                issues.push(GraphIssue::InvalidSampleCount {
+                    resource: resource.name.clone(),
+                    sample_count: resource.sample_count,
+                });
+            }
+        }
 
         for pass in &self.passes {
             if pass.name.trim().is_empty() {
@@ -379,30 +405,75 @@ impl RenderGraph {
 pub fn build_baseline_frame_graph() -> RenderGraph {
     let mut graph = RenderGraph::default();
 
-    let hardware_depth = graph.add_resource(ResourceDesc::new(
-        "hardware-depth",
-        Format::D32,
+    let hardware_depth = graph.add_resource(
+        ResourceDesc::new(
+            "2x-msaa-hardware-depth",
+            Format::D32S8,
+            ResourceKind::HardwareDepth,
+        )
+        .multisampled(2),
+    );
+    let motion_vectors = graph.add_resource(
+        ResourceDesc::new(
+            "2x-msaa-motion-vectors",
+            Format::Rg16,
+            ResourceKind::MotionVectors,
+        )
+        .multisampled(2),
+    );
+    let albedo = graph.add_resource(
+        ResourceDesc::new(
+            "2x-msaa-gbuffer-albedo",
+            Format::Rgba8,
+            ResourceKind::GBuffer,
+        )
+        .multisampled(2),
+    );
+    let normals = graph.add_resource(
+        ResourceDesc::new(
+            "2x-msaa-gbuffer-normals-material-flags",
+            Format::Rgba16,
+            ResourceKind::GBuffer,
+        )
+        .multisampled(2),
+    );
+    let pbr = graph.add_resource(
+        ResourceDesc::new(
+            "2x-msaa-gbuffer-pbr-material-id",
+            Format::Rgba8,
+            ResourceKind::GBuffer,
+        )
+        .multisampled(2),
+    );
+    let resolved_depth = graph.add_resource(ResourceDesc::new(
+        "resolved-hardware-depth",
+        Format::D32S8,
         ResourceKind::HardwareDepth,
     ));
-    let motion_vectors = graph.add_resource(ResourceDesc::new(
-        "motion-vectors",
+    let resolved_motion = graph.add_resource(ResourceDesc::new(
+        "resolved-motion-vectors",
         Format::Rg16,
         ResourceKind::MotionVectors,
     ));
-    let albedo = graph.add_resource(ResourceDesc::new(
-        "gbuffer-albedo",
+    let resolved_albedo = graph.add_resource(ResourceDesc::new(
+        "resolved-gbuffer-albedo",
         Format::Rgba8,
         ResourceKind::GBuffer,
     ));
-    let normals = graph.add_resource(ResourceDesc::new(
-        "gbuffer-normals-material-flags",
+    let resolved_normals = graph.add_resource(ResourceDesc::new(
+        "resolved-gbuffer-normals-material-flags",
         Format::Rgba16,
         ResourceKind::GBuffer,
     ));
-    let pbr = graph.add_resource(ResourceDesc::new(
-        "gbuffer-pbr-material-id",
+    let resolved_pbr = graph.add_resource(ResourceDesc::new(
+        "resolved-gbuffer-pbr-material-id",
         Format::Rgba8,
         ResourceKind::GBuffer,
+    ));
+    let sample_coverage = graph.add_resource(ResourceDesc::new(
+        "2x-msaa-resolved-sample-coverage",
+        Format::R8,
+        ResourceKind::Other,
     ));
     let depth_copy = graph.add_resource(ResourceDesc::new(
         "depth-copy-r32f",
@@ -417,10 +488,15 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         )
         .scaled(0.5, 0.5),
     );
-    let shadow_mask = graph.add_resource(ResourceDesc::new(
-        "shadow-mask-r8-array",
-        Format::R8Array,
-        ResourceKind::ShadowMask,
+    let directional_shadow = graph.add_resource(ResourceDesc::new(
+        "cached-directional-shadow-map",
+        Format::D32,
+        ResourceKind::HardwareDepth,
+    ));
+    let local_shadows = graph.add_resource(ResourceDesc::new(
+        "cached-local-shadow-map-array",
+        Format::D32,
+        ResourceKind::HardwareDepth,
     ));
     let lighting = graph.add_resource(ResourceDesc::new(
         "albedo-free-lighting-rgba16",
@@ -436,19 +512,6 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         "smaa-edge-mask-rg8",
         Format::Rg8,
         ResourceKind::PostProcess,
-    ));
-    let ssao = graph.add_resource(
-        ResourceDesc::new("small-radius-ssao", Format::Rg8, ResourceKind::Other).scaled(0.5, 0.5),
-    );
-    let contact_shadows = graph.add_resource(ResourceDesc::new(
-        "material-depth-contact-shadows",
-        Format::Rg8,
-        ResourceKind::Other,
-    ));
-    let indirect = graph.add_resource(ResourceDesc::new(
-        "probe-indirect-bent-normal-lighting",
-        Format::Rgba16,
-        ResourceKind::Lighting,
     ));
     let ssr = graph.add_resource(
         ResourceDesc::new(
@@ -503,6 +566,57 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         Format::Rgba16,
         ResourceKind::PostProcess,
     ));
+    let velocity_a = graph.add_resource(ResourceDesc::new(
+        "single-direction-velocity-compensation-a",
+        Format::Rgba16,
+        ResourceKind::PostProcess,
+    ));
+    let velocity_b = graph.add_resource(ResourceDesc::new(
+        "separable-velocity-compensation-b",
+        Format::Rgba16,
+        ResourceKind::PostProcess,
+    ));
+    let composite_effects = graph.add_resource(
+        ResourceDesc::new(
+            "half-resolution-camera-composite-effects",
+            Format::Rgba16,
+            ResourceKind::PostProcess,
+        )
+        .scaled(0.5, 0.5),
+    );
+    let aa_history = graph.add_resource(ResourceDesc::new(
+        "two-frame-spatial-smaa-history",
+        Format::Rgb10A2,
+        ResourceKind::History,
+    ));
+    let aa_presented = graph.add_resource(ResourceDesc::new(
+        "anti-aliased-scene-presentation",
+        Format::Rgb10A2,
+        ResourceKind::PostProcess,
+    ));
+    let ui_overlay = graph.add_resource(ResourceDesc::new(
+        "separate-linear-ui-overlay",
+        Format::Rgba8,
+        ResourceKind::PostProcess,
+    ));
+    let presented = graph.add_resource(ResourceDesc::new(
+        "gamma-correct-scene-ui-presentation",
+        Format::Rgba8,
+        ResourceKind::PostProcess,
+    ));
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "cached-alpha-aware-directional-and-local-shadow-maps",
+            "shadows",
+            FeatureCategory::Shadows,
+            1.4,
+        )
+        .write(directional_shadow)
+        .write(local_shadows)
+        .attachment(directional_shadow, LoadOp::Clear, StoreOp::Store)
+        .attachment(local_shadows, LoadOp::Clear, StoreOp::Store),
+    );
 
     graph.add_pass(
         RenderPassDesc::new(
@@ -549,12 +663,38 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
 
     graph.add_pass(
         RenderPassDesc::new(
+            "2x-msaa-gbuffer-custom-coverage-resolve",
+            "geometry",
+            FeatureCategory::AntiAliasing,
+            0.45,
+        )
+        .read(hardware_depth)
+        .read(albedo)
+        .read(normals)
+        .read(pbr)
+        .read(motion_vectors)
+        .write(resolved_depth)
+        .write(resolved_albedo)
+        .write(resolved_normals)
+        .write(resolved_pbr)
+        .write(resolved_motion)
+        .write(sample_coverage)
+        .target_format(Format::Rgba8)
+        .target_format(Format::Rgba16)
+        .target_format(Format::Rgba8)
+        .target_format(Format::Rg16)
+        .target_format(Format::R8)
+        .attachment(resolved_depth, LoadOp::Clear, StoreOp::Store),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
             "depth-copy-fullscreen-triangle",
             "visibility",
             FeatureCategory::Visibility,
             0.2,
         )
-        .read(hardware_depth)
+        .read(resolved_depth)
         .write(depth_copy)
         .target_format(Format::R32F),
     );
@@ -573,60 +713,6 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
 
     graph.add_pass(
         RenderPassDesc::new(
-            "stencil-restricted-shadow-projection",
-            "shadows",
-            FeatureCategory::Shadows,
-            1.0,
-        )
-        .read(hardware_depth)
-        .read(hiz)
-        .write(shadow_mask)
-        .target_format(Format::R8Array)
-        .attachment(shadow_mask, LoadOp::Load, StoreOp::Store)
-        .stencil_light_projection(),
-    );
-
-    graph.add_pass(
-        RenderPassDesc::new(
-            "multi-scale-ao-and-bent-normal-occlusion",
-            "occlusion",
-            FeatureCategory::AmbientOcclusion,
-            0.8,
-        )
-        .read(depth_copy)
-        .read(normals)
-        .write(ssao)
-        .target_format(Format::Rg8),
-    );
-
-    graph.add_pass(
-        RenderPassDesc::new(
-            "screen-space-contact-shadows",
-            "occlusion",
-            FeatureCategory::AmbientOcclusion,
-            0.3,
-        )
-        .read(depth_copy)
-        .read(pbr)
-        .write(contact_shadows)
-        .target_format(Format::Rg8),
-    );
-
-    graph.add_pass(
-        RenderPassDesc::new(
-            "probe-indirect-lighting",
-            "lighting",
-            FeatureCategory::IndirectLighting,
-            1.5,
-        )
-        .read(normals)
-        .read(ssao)
-        .write(indirect)
-        .target_format(Format::Rgba16),
-    );
-
-    graph.add_pass(
-        RenderPassDesc::new(
             "optimized-half-resolution-ssr",
             "reflections",
             FeatureCategory::Reflections,
@@ -634,8 +720,9 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         )
         .resolution_scale(0.5)
         .read(depth_copy)
-        .read(normals)
-        .read(pbr)
+        .read(resolved_albedo)
+        .read(resolved_normals)
+        .read(resolved_pbr)
         .write(ssr)
         .target_format(Format::Rgba16),
     );
@@ -650,7 +737,13 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         .resolution_scale(0.7)
         .read(depth_copy)
         .read(hiz)
+        .read(resolved_albedo)
+        .read(resolved_normals)
+        .read(resolved_pbr)
+        .read(directional_shadow)
+        .read(local_shadows)
         .read(ssr)
+        .read(resolved_motion)
         .history(rt_history)
         .write(software_rt)
         .target_format(Format::Rgba16)
@@ -672,23 +765,53 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
 
     graph.add_pass(
         RenderPassDesc::new(
-            "albedo-free-deferred-lighting",
+            "local-light-z-fail-stencil-volumes",
+            "lighting",
+            FeatureCategory::DirectLighting,
+            0.25,
+        )
+        .read(resolved_depth)
+        .attachment(resolved_depth, LoadOp::Load, StoreOp::Store)
+        .stencil_light_projection(),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "material-profile-directional-lighting-fused-ao-contact-shadows",
             "lighting",
             FeatureCategory::DirectLighting,
             1.5,
         )
-        .read(normals)
-        .read(pbr)
+        .read(resolved_albedo)
+        .read(resolved_normals)
+        .read(resolved_pbr)
         .read(depth_copy)
         .read(hiz)
-        .read(shadow_mask)
-        .read(ssao)
-        .read(contact_shadows)
-        .read(indirect)
+        .read(directional_shadow)
+        .read(local_shadows)
         .read(ssr)
         .read(software_rt)
         .write(lighting)
         .target_format(Format::Rgba16),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "stencil-restricted-local-lighting",
+            "lighting",
+            FeatureCategory::DirectLighting,
+            0.75,
+        )
+        .read(resolved_depth)
+        .read(resolved_albedo)
+        .read(resolved_normals)
+        .read(resolved_pbr)
+        .read(directional_shadow)
+        .read(local_shadows)
+        .write(lighting)
+        .target_format(Format::Rgba16)
+        .attachment(resolved_depth, LoadOp::Load, StoreOp::Store)
+        .stencil_light_projection(),
     );
 
     graph.add_pass(
@@ -705,12 +828,54 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
 
     graph.add_pass(
         RenderPassDesc::new(
+            "single-direction-depth-aware-velocity-compensation",
+            "post",
+            FeatureCategory::PostProcess,
+            0.7,
+        )
+        .read(lighting)
+        .read(resolved_motion)
+        .read(resolved_depth)
+        .write(velocity_a)
+        .target_format(Format::Rgba16),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "separable-velocity-compensation-smoothing",
+            "post",
+            FeatureCategory::PostProcess,
+            0.35,
+        )
+        .read(velocity_a)
+        .read(resolved_motion)
+        .read(resolved_depth)
+        .write(velocity_b)
+        .target_format(Format::Rgba16),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "half-resolution-camera-composite-effects",
+            "post",
+            FeatureCategory::PostProcess,
+            0.5,
+        )
+        .resolution_scale(0.5)
+        .read(velocity_b)
+        .read(depth_copy)
+        .write(composite_effects)
+        .target_format(Format::Rgba16),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
             "kawase-bloom-chain",
             "post",
             FeatureCategory::PostProcess,
             0.6,
         )
-        .read(lighting)
+        .read(velocity_b)
         .write(bloom)
         .target_format(Format::Rg11B10),
     );
@@ -722,10 +887,11 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
             FeatureCategory::PostProcess,
             1.0,
         )
-        .read(lighting)
+        .read(velocity_b)
         .read(volumetric_fog)
         .read(bloom)
         .read(exposure_white_balance)
+        .read(composite_effects)
         .write(tone_mapped)
         .target_format(Format::Rgb10A2),
     );
@@ -738,23 +904,67 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
             0.5,
         )
         .read(tone_mapped)
+        .read(resolved_depth)
+        .read(sample_coverage)
         .write(smaa_edges)
         .target_format(Format::Rg8),
     );
 
     graph.add_pass(
         RenderPassDesc::new(
-            "smaa-compute-blend-and-persistence",
+            "smaa-blend-weights",
             "anti-aliasing",
             FeatureCategory::AntiAliasing,
             0.5,
         )
         .read(smaa_edges)
         .read(tone_mapped)
-        .history(rt_history)
+        .read(resolved_depth)
         .write(smaa_blend)
-        .target_format(Format::Rgba16)
+        .target_format(Format::Rgba16),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "smaa-t2x-motion-vector-resolve",
+            "anti-aliasing",
+            FeatureCategory::AntiAliasing,
+            0.5,
+        )
+        .read(tone_mapped)
+        .read(smaa_blend)
+        .read(resolved_depth)
+        .read(resolved_normals)
+        .read(resolved_motion)
+        .history(aa_history)
+        .write(aa_history)
+        .write(aa_presented)
+        .target_format(Format::Rgb10A2)
         .temporal_dependency(TemporalDependencyLevel::Optional),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "separate-linear-ui-overlay",
+            "ui",
+            FeatureCategory::Ui,
+            0.25,
+        )
+        .write(ui_overlay)
+        .target_format(Format::Rgba8),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "gamma-correct-scene-ui-presentation",
+            "ui",
+            FeatureCategory::Ui,
+            0.25,
+        )
+        .read(aa_presented)
+        .read(ui_overlay)
+        .write(presented)
+        .target_format(Format::Rgba8),
     );
 
     graph
