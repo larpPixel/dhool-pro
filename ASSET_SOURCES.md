@@ -32,12 +32,19 @@ The optional `--map dust2` scene consumes a local, git-ignored export from the
 user's licensed Counter-Strike 2 install:
 
 - Source VPK: `/mnt/windows/Program Files (x86)/Steam/steamapps/common/Counter-Strike Global Offensive/game/csgo/maps/de_dust2.vpk`
+- Shared VPK for materials/skybox: `/mnt/windows/Program Files (x86)/Steam/steamapps/common/Counter-Strike Global Offensive/game/csgo/pak01_dir.vpk`
 - Exporter: ValveResourceFormat `Source2Viewer-CLI`
 - Import script: `scripts/import_cs2_dust2.sh`
-- Local output: `assets/dust2/generated/cs2/maps/de_dust2/world_physics_physics.glb`
+- Local visual output: `assets/dust2/generated/cs2/maps/de_dust2.glb`
+- Local material textures: `assets/dust2/generated/cs2/maps/*.png`
+- Local skybox output: `assets/dust2/generated/cs2/materials/skybox/sky_de_dust2.{vmat,exr,png}`
+- Local physics fallback: `assets/dust2/generated/cs2/maps/de_dust2/world_physics_physics.glb`
 
 The generated CS2-derived output is intentionally ignored by git and is not
-redistributed by this project.
+redistributed by this project. The runtime Dust2 loader uses the visual GLB,
+loads exported albedo textures at a capped in-memory resolution, filters Source
+2 tool/clip meshes, adds a converted Dust2 skybox shell when present, and keeps
+the old physics export only as a fallback.
 
 ## Generated City Decals
 

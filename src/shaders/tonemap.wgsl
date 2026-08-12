@@ -1,6 +1,7 @@
 @group(0) @binding(0) var scene_hdr: texture_2d<f32>;
 @group(0) @binding(1) var bloom_tex: texture_2d<f32>;
 @group(0) @binding(2) var volumetric_fog: texture_2d<f32>;
+@group(0) @binding(3) var exposure_white_balance: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -88,6 +89,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(input.position.xy);
     let fog = sample_fog(input.uv);
     let lit = load_hdr(pixel) + sample_bloom(input.uv) * 0.30;
-    let hdr = mix(lit, fog.rgb, clamp(fog.a, 0.0, 0.30));
-    return vec4<f32>(gt_tonemap(max(hdr, vec3<f32>(0.0))), 1.0);
+    let hdr = mix(lit, fog.rgb, clamp(fog.a, 0.0, 0.16));
+    let calibration = textureLoad(exposure_white_balance, vec2<i32>(0), 0);
+    let calibrated_hdr = hdr * calibration.rgb * calibration.a;
+    return vec4<f32>(gt_tonemap(max(calibrated_hdr, vec3<f32>(0.0))), 1.0);
 }

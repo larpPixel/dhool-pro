@@ -1,3 +1,4 @@
+use dhool_pro::math::{Mat4, Vec4};
 use dhool_pro::perf::{gt_tonemap_rgba8, kawase_blur_rgba32f};
 use dhool_pro::renderer::RenderWarning;
 use dhool_pro::scene::LightKind;
@@ -33,6 +34,24 @@ fn demo_scene_renders_non_black_frame() {
         warning,
         RenderWarning::OverwrittenExpensiveMaterialArea { .. }
     )));
+}
+
+#[test]
+fn reverse_z_projection_maps_near_to_one_and_far_to_zero() {
+    let near = 0.1;
+    let far = 1_000.0;
+    let projection = Mat4::perspective_reverse_rh(60.0_f32.to_radians(), 16.0 / 9.0, near, far);
+
+    let near_clip = projection.mul_vec4(Vec4::new(0.0, 0.0, -near, 1.0));
+    let far_clip = projection.mul_vec4(Vec4::new(0.0, 0.0, -far, 1.0));
+    let near_depth = near_clip.z / near_clip.w;
+    let far_depth = far_clip.z / far_clip.w;
+
+    assert!(
+        (near_depth - 1.0).abs() < 1.0e-5,
+        "near depth was {near_depth}"
+    );
+    assert!(far_depth.abs() < 1.0e-5, "far depth was {far_depth}");
 }
 
 #[test]
@@ -270,46 +289,253 @@ fn aaa_scene_uses_generated_decal_assets_and_deeper_set_dressing() {
 fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
     let exported_world =
         std::path::Path::new("assets/dust2/generated/cs2/maps/de_dust2/world_physics_physics.glb");
-    assert!(
-        exported_world.is_file(),
-        "run scripts/import_cs2_dust2.sh before testing the CS2 Dust2 map"
-    );
+    if exported_world.is_file() {
+        assert!(exported_world.metadata().expect("Dust2 physics GLB").len() > 40_000_000);
+        assert!(std::path::Path::new("assets/dust2/generated/cs2/maps/de_dust2.glb").is_file());
 
-    let scene = build_dust2_scene("assets/dust2").expect("CS2 Dust2 scene");
+        let texture_count = std::fs::read_dir("assets/dust2/generated/cs2/maps")
+            .expect("Dust2 texture directory")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "png")
+            })
+            .count();
+        assert!(texture_count >= 600);
+        assert!(std::path::Path::new(
+            "assets/dust2/generated/cs2/materials/skybox/sky_de_dust2.png"
+        )
+        .is_file());
+        let manifest =
+            std::fs::read_to_string("assets/dust2/generated/cs2/manifest.json").expect("manifest");
+        assert!(manifest.contains("\"visual_mesh\": \"maps/de_dust2.glb\""));
+        assert!(manifest.contains("\"visual_texture_count\": 648"));
+        assert!(manifest.contains("\"skybox_texture\": \"materials/skybox/sky_de_dust2.png\""));
+
+        let previous_physics_import = std::env::var_os("DHOOL_DUST2_PHYSICS_IMPORT");
+        std::env::set_var("DHOOL_DUST2_PHYSICS_IMPORT", "1");
+        let scene = build_dust2_scene("assets/dust2").expect("CS2 Dust2 scene");
+        if let Some(previous_physics_import) = previous_physics_import {
+            std::env::set_var("DHOOL_DUST2_PHYSICS_IMPORT", previous_physics_import);
+        } else {
+            std::env::remove_var("DHOOL_DUST2_PHYSICS_IMPORT");
+        }
+        let triangles: usize = scene.meshes.iter().map(|mesh| mesh.indices.len()).sum();
+        let vertices: usize = scene.meshes.iter().map(|mesh| mesh.vertices.len()).sum();
+
+        assert!(scene
+            .meshes
+            .iter()
+            .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_concrete")));
+        assert!(scene
+            .meshes
+            .iter()
+            .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_metal")));
+        assert!(scene
+            .meshes
+            .iter()
+            .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_wood")));
+        assert!(!scene
+            .meshes
+            .iter()
+            .any(|mesh| mesh.name.starts_with("cs2_dust2_visual_")));
+        assert!(scene
+            .materials
+            .iter()
+            .any(|material| material.name == "cs2_dust2_concrete_plaster"));
+        assert!(scene
+            .materials
+            .iter()
+            .any(|material| material.name == "cs2_dust2_glass"));
+        assert!(
+            scene
+                .materials
+                .iter()
+                .filter(|material| material.base_color_texture.is_some())
+                .count()
+                >= 8
+        );
+        assert!(!scene
+            .meshes
+            .iter()
+            .any(|mesh| mesh.name == "cs2_dust2_skybox_shell"));
+        assert!(!scene
+            .materials
+            .iter()
+            .any(|material| material.name == "cs2_dust2_skybox"));
+
+        assert!(scene.meshes.len() >= 30);
+        assert!(triangles >= 400_000);
+        assert!(vertices >= 1_000_000);
+        assert!(scene.camera.far >= 600.0);
+        assert!((1.0..=3.0).contains(&scene.camera.position.y));
+        assert!(scene.camera.position.z < -30.0);
+    } else {
+        let import_script =
+            std::fs::read_to_string("scripts/import_cs2_dust2.sh").expect("Dust2 import script");
+        assert!(import_script.contains("--gltf_export_materials"));
+        assert!(import_script.contains("maps/de_dust2.glb"));
+        assert!(import_script.contains("sky_de_dust2"));
+        assert!(import_script.contains("-colorspace sRGB -alpha off"));
+        assert!(!import_script.contains("-auto-level"));
+    }
+
+    let scene_source = std::fs::read_to_string("src/scene.rs").expect("scene source");
+    assert!(scene_source.contains("import_gltf_with_texture_limits_filter_budget_by_primitive"));
+    assert!(scene_source.contains("CS2_DUST2_STRUCTURAL_TEXTURE_DIMENSION"));
+    assert!(scene_source.contains("CS2_DUST2_STRUCTURAL_PBR_TEXTURE_DIMENSION"));
+    assert!(scene_source.contains("materials/skybox/sky_de_dust2.vmat"));
+    assert!(scene_source.contains("lighting/postprocessing/de_dust2_prefab/de_dust2_prefab.vpost"));
+    assert!(scene_source.contains("0.925"));
+    assert!(scene_source.contains("1.1"));
+    assert!(scene_source.contains("211.0 / 255.0"));
+    assert!(scene_source.contains("CS2_DUST2_SOURCE_SUN_COLOR"));
+    assert!(scene_source.contains("cs2_dust2_visual_lights"));
+    assert!(scene_source.contains("DHOOL_DUST2_PHYSICS_IMPORT"));
+    assert!(scene_source.contains("DHOOL_DUST2_VISUAL_IMPORT"));
+    assert!(scene_source.contains("CS2_DUST2_LIVE_IMPORT_BUDGET"));
+    assert!(scene_source.contains("DHOOL_DUST2_FULL_VISUAL"));
+    assert!(scene_source.contains("apply_cs2_dust2_physics_material_textures"));
+    assert!(!scene_source.contains("cs2_dust2_skybox_shell"));
+    assert!(scene_source.contains("far: 620.0"));
+
+    let import_source = std::fs::read_to_string("src/gltf_import.rs").expect("glTF import source");
+    assert!(import_source.contains("GltfImportBudget"));
+    assert!(import_source.contains("compact_indexed_geometry"));
+
+    let gpu_source = std::fs::read_to_string("src/gpu.rs").expect("GPU source");
+    assert!(gpu_source.contains("DUST2_SKYBOX_TEXTURE"));
+    assert!(gpu_source.contains("live_skybox_texture_for_map"));
+    assert!(gpu_source.contains("lighting-skybox-panorama"));
+    assert!(gpu_source.contains("ControlFlow::Poll"));
+    assert!(gpu_source.contains("fn about_to_wait"));
+
+    let lighting_source =
+        std::fs::read_to_string("src/shaders/lighting.wgsl").expect("lighting shader");
+    assert!(lighting_source.contains("var skybox: texture_2d"));
+    assert!(lighting_source.contains("textureSample(skybox"));
+    assert!(lighting_source.contains("atan2(ray.z, ray.x)"));
+    assert!(lighting_source.contains("SOURCE2_DUST2_SKY_EXPOSURE_BIAS"));
+    assert!(lighting_source.contains("DUST2_SKY_YAW_OFFSET"));
+
+    let main_source = std::fs::read_to_string("src/main.rs").expect("main source");
+    assert!(main_source.contains("normalize_live_locale_for_xkb"));
+    assert!(main_source.contains("is_xkb_bad_locale"));
+    assert!(main_source.contains("C.UTF-8"));
+}
+
+#[test]
+#[ignore = "heavy local CS2 visual import; run manually after scripts/import_cs2_dust2.sh"]
+fn dust2_live_visual_scene_constructs_from_generated_assets() {
+    let visual_path = std::path::Path::new("assets/dust2/generated/cs2/maps/de_dust2.glb");
+    if !visual_path.is_file() {
+        eprintln!(
+            "skipping local CS2 Dust2 scene test; missing {}",
+            visual_path.display()
+        );
+        return;
+    }
+
+    let previous_visual_import = std::env::var_os("DHOOL_DUST2_VISUAL_IMPORT");
+    let previous_full_visual = std::env::var_os("DHOOL_DUST2_FULL_VISUAL");
+    std::env::set_var("DHOOL_DUST2_VISUAL_IMPORT", "1");
+    std::env::remove_var("DHOOL_DUST2_FULL_VISUAL");
+    let scene = build_dust2_scene("assets/dust2").expect("CS2 Dust2 visual scene");
+    if let Some(previous_visual_import) = previous_visual_import {
+        std::env::set_var("DHOOL_DUST2_VISUAL_IMPORT", previous_visual_import);
+    } else {
+        std::env::remove_var("DHOOL_DUST2_VISUAL_IMPORT");
+    }
+    if let Some(previous_full_visual) = previous_full_visual {
+        std::env::set_var("DHOOL_DUST2_FULL_VISUAL", previous_full_visual);
+    }
     let triangles: usize = scene.meshes.iter().map(|mesh| mesh.indices.len()).sum();
     let vertices: usize = scene.meshes.iter().map(|mesh| mesh.vertices.len()).sum();
-
-    assert!(scene
-        .meshes
-        .iter()
-        .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_concrete")));
-    assert!(scene
-        .meshes
-        .iter()
-        .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_metal")));
-    assert!(scene
-        .meshes
-        .iter()
-        .any(|mesh| mesh.name.starts_with("cs2_dust2_physics_group_wood")));
-    assert!(scene
+    let base_color_textures = scene
         .materials
         .iter()
-        .any(|material| material.name == "cs2_dust2_concrete_plaster"));
-    assert!(scene
+        .filter(|material| material.base_color_texture.is_some())
+        .count();
+    let high_res_base_color_textures = scene
         .materials
         .iter()
-        .any(|material| material.name == "cs2_dust2_glass"));
+        .filter_map(|material| material.base_color_texture.as_ref())
+        .filter(|texture| texture.width.max(texture.height) > 512)
+        .count();
+    let normal_textures = scene
+        .materials
+        .iter()
+        .filter(|material| material.normal_texture.is_some())
+        .count();
+    let pbr_textures = scene
+        .materials
+        .iter()
+        .filter(|material| material.pbr_texture.is_some())
+        .count();
 
-    assert!(scene.meshes.len() >= 30);
-    assert!(triangles >= 400_000);
-    assert!(vertices >= 1_000_000);
-    assert!(scene.camera.far >= 600.0);
-    assert!((1.0..=3.0).contains(&scene.camera.position.y));
-    assert!(scene.camera.position.z < -30.0);
+    eprintln!(
+        "Dust2 visual scene: {} meshes, {triangles} triangles, {vertices} vertices, {} materials, {base_color_textures} base textures, {high_res_base_color_textures} high-res base textures, {normal_textures} normal textures, {pbr_textures} pbr textures",
+        scene.meshes.len(),
+        scene.materials.len()
+    );
+    assert!(scene
+        .meshes
+        .iter()
+        .any(|mesh| mesh.name.starts_with("cs2_dust2_visual_")));
+    for required_detail in [
+        "chainlink_fence_wire",
+        "palm_bark",
+        "agave_plant",
+        "antenna_card",
+        "crates_dishes",
+        "dust_weeds",
+        "zebra_grass",
+        "olive_branch",
+        "sumac",
+    ] {
+        assert!(
+            scene
+                .meshes
+                .iter()
+                .any(|mesh| mesh.name.to_ascii_lowercase().contains(required_detail)),
+            "missing restored CS2 Dust2 detail asset {required_detail}"
+        );
+    }
+    assert!(
+        scene
+            .materials
+            .iter()
+            .filter(|material| material.base_color_texture.is_some())
+            .count()
+            >= 80
+    );
+    assert!(high_res_base_color_textures >= 120);
+    assert!(normal_textures >= 200);
+    assert!(pbr_textures >= 200);
     assert!(!scene
         .meshes
         .iter()
-        .any(|mesh| mesh.name == "t_spawn_plaza_floor"));
+        .any(|mesh| mesh.name == "cs2_dust2_skybox_shell"));
+    assert!(scene
+        .lights
+        .iter()
+        .any(|light| light.name == "cs2_dust2_fixture_hanging_light"));
+    assert!(scene
+        .lights
+        .iter()
+        .any(|light| light.name == "cs2_dust2_fixture_ceiling_light"));
+    assert!(scene.meshes.len() >= 3_500);
+    assert!(triangles >= 4_300_000);
+    assert!(vertices >= 4_100_000);
+    assert!(triangles <= 4_900_000);
+    assert!(vertices <= 5_000_000);
+    assert!(scene.camera.far >= 600.0);
+    assert!(!scene
+        .meshes
+        .iter()
+        .any(|mesh| mesh.name.to_ascii_lowercase().contains("blocklight")));
 }
 
 #[test]
@@ -319,9 +545,20 @@ fn live_gpu_uses_scene_camera_fov_and_clip_distance() {
     assert!(gpu.contains("camera_fov_y: f32"));
     assert!(gpu.contains("camera_far: f32"));
     assert!(gpu.contains("let camera_far = scene.camera.far"));
-    assert!(gpu.contains(
-        "let projection = Mat4::perspective_rh(\n            self.camera_fov_y,\n            self.config.width as f32 / self.config.height as f32,\n            self.camera_near,\n            self.camera_far,\n        );"
-    ));
+    assert!(gpu.contains("display_fps"));
+    assert!(gpu.contains("live FPS:"));
+    assert!(gpu.contains("FrameCapture"));
+    assert!(gpu.contains("copy_presented_frame_to_buffer"));
+    assert!(gpu.contains("captured live frame"));
+    assert!(gpu.contains("let projection = perspective_reverse_rh("));
+    assert!(gpu.contains("REVERSE_Z_CLEAR_DEPTH"));
+    assert!(gpu.contains("CompareFunction::GreaterEqual"));
+    assert!(!gpu.contains("CompareFunction::LessEqual"));
+
+    let aa_shader = include_str!("../src/shaders/aa.wgsl");
+    assert!(aa_shader.contains("apply_fps_overlay"));
+    assert!(aa_shader.contains("fps_overlay_coverage"));
+    assert!(aa_shader.contains("aa.params.w"));
 }
 
 #[test]
@@ -523,6 +760,7 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     let ssr_shader = include_str!("../src/shaders/ssr.wgsl");
     let bloom_shader = include_str!("../src/shaders/bloom.wgsl");
     let tonemap_shader = include_str!("../src/shaders/tonemap.wgsl");
+    let exposure_shader = include_str!("../src/shaders/auto_exposure.wgsl");
 
     assert!(lighting_shader.contains("texture_depth_2d_array"));
     assert!(lighting_shader.contains("local_shadow_cameras"));
@@ -542,6 +780,11 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     assert!(gpu.contains("gt-tonemap-bloom-resolve"));
     assert!(bloom_shader.contains("fs_extract"));
     assert!(tonemap_shader.contains("gt_tonemap"));
+    assert!(gpu.contains("diffuse-luminance-auto-exposure-white-balance"));
+    assert!(exposure_shader.contains("texture_storage_2d<rgba16float, write>"));
+    assert!(exposure_shader.contains("0.18 / max(geometric_mean"));
+    assert!(exposure_shader.contains("vec3<f32>(0.78)"));
+    assert!(tonemap_shader.contains("exposure_white_balance"));
 }
 
 #[test]
@@ -570,6 +813,12 @@ fn live_gpu_uses_motion_smaa_stages_and_shadow_cache_flags() {
     assert!(geometry_shader.contains("@location(3) motion_vectors"));
     assert!(aa_shader.contains("@group(0) @binding(5) var motion_vectors"));
     assert!(aa_shader.contains("@group(0) @binding(6) var smaa_blend"));
+    assert!(aa_shader.contains("@group(0) @binding(7) var normal_flags"));
+    assert!(aa_shader.contains("(material_flags & 2u) != 0u"));
+    assert!(aa_shader.contains("let spatial_resolve = smaa_resolve"));
+    assert!(aa_shader.contains("edge_strength > 0.0001"));
+    assert!(aa_shader.contains("vec4<f32>(spatial_resolve, edge_strength)"));
+    assert!(!aa_shader.contains("vec4<f32>(resolved, 1.0)"));
     assert!(tonemap_shader.contains("@group(0) @binding(2) var volumetric_fog"));
     assert!(gpu.contains("reflection-proxy-uniform"));
     assert!(gpu.contains("MAX_REFLECTION_PROXIES"));

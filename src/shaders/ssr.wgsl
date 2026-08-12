@@ -120,10 +120,10 @@ fn trace_screen_space_reflection(origin: vec3<f32>, ray: vec3<f32>, source_size:
             vec2<i32>(source_size) - vec2<i32>(1)
         );
         let sample_depth = textureLoad(depth, sample_pixel, 0);
-        if sample_depth >= 0.99999 {
+        if sample_depth <= 0.00001 {
             continue;
         }
-        let depth_delta = projected.z - sample_depth;
+        let depth_delta = sample_depth - projected.z;
         let thickness = 0.007 + travel * 0.002;
         if depth_delta > 0.0 && depth_delta < 0.032 + thickness {
             let hit_uv = (vec2<f32>(sample_pixel) + 0.5) / vec2<f32>(source_size);
@@ -153,7 +153,7 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         source_size - vec2<u32>(1u)
     );
     let scene_depth = textureLoad(depth, vec2<i32>(source_pixel), 0);
-    if scene_depth >= 0.99999 {
+    if scene_depth <= 0.00001 {
         textureStore(output_ssr, vec2<i32>(invocation.xy), vec4<f32>(0.0));
         return;
     }

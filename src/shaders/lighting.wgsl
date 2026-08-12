@@ -33,6 +33,8 @@ struct LocalShadowCameras {
 @group(0) @binding(9) var<uniform> lights: Lights;
 @group(0) @binding(10) var local_shadow_maps: texture_depth_2d_array;
 @group(0) @binding(11) var<uniform> local_shadow_cameras: LocalShadowCameras;
+@group(0) @binding(12) var skybox: texture_2d<f32>;
+@group(0) @binding(13) var skybox_sampler: sampler;
 const RAIN_GRID_X: u32 = 64u;
 const RAIN_GRID_Z: u32 = 64u;
 const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-18.5, 0.14, -82.0);
@@ -40,6 +42,10 @@ const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(37.0, 13.5, 100.0);
 const EMISSIVE_SCALE: f32 = 12.0;
 const PRACTICAL_SPOT_MIN_FILL: f32 = 0.26;
 const PRACTICAL_SPOT_MIN_SHADOW: f32 = 0.24;
+const INV_PI: f32 = 0.31830988618;
+const INV_TAU: f32 = 0.15915494309;
+const SOURCE2_DUST2_SKY_EXPOSURE_BIAS: f32 = 0.765;
+const DUST2_SKY_YAW_OFFSET: f32 = 0.516;
 
 
 struct VertexOutput {
@@ -159,16 +165,28 @@ fn reconstruct_world_position(uv: vec2<f32>, scene_depth: f32) -> vec3<f32> {
 }
 
 fn sky_radiance(uv: vec2<f32>) -> vec3<f32> {
-    let far_world = reconstruct_world_position(uv, 1.0);
+    let far_world = reconstruct_world_position(uv, 0.0);
     let ray = safe_normalize(far_world - camera.position_time.xyz);
-    let horizon = pow(clamp(ray.y * 0.5 + 0.5, 0.0, 1.0), 1.7);
-    let sky = mix(lights.sky.rgb * 0.35, lights.sky.rgb * 2.4 + lights.ambient.rgb * 0.6, horizon);
     let moon_direction = safe_normalize(lights.directional_direction_count.xyz);
     let moon_alignment = max(dot(ray, moon_direction), 0.0);
     let moon = pow(moon_alignment, 720.0)
         * lights.directional_color_intensity.rgb
         * lights.directional_color_intensity.w
         * 0.95;
+
+    let skybox_size = textureDimensions(skybox);
+    if skybox_size.x > 1u || skybox_size.y > 1u {
+        let panorama_uv = vec2<f32>(
+            fract(0.5 + atan2(ray.z, ray.x) * INV_TAU + DUST2_SKY_YAW_OFFSET),
+            clamp(0.5 - asin(clamp(ray.y, -1.0, 1.0)) * INV_PI, 0.0, 1.0)
+        );
+        let source_sky = textureSample(skybox, skybox_sampler, panorama_uv).rgb
+            * exp2(SOURCE2_DUST2_SKY_EXPOSURE_BIAS);
+        return source_sky + moon * 0.10;
+    }
+
+    let horizon = pow(clamp(ray.y * 0.5 + 0.5, 0.0, 1.0), 1.7);
+    let sky = mix(lights.sky.rgb * 0.35, lights.sky.rgb * 2.4 + lights.ambient.rgb * 0.6, horizon);
     return sky + moon;
 }
 
@@ -247,7 +265,7 @@ fn screen_space_occlusion(pixel: vec2<u32>, world_position: vec3<f32>, normal: v
         );
         let sample_pixel = vec2<u32>(sample_pixel_i);
         let sample_depth = textureLoad(depth, sample_pixel_i, 0);
-        if sample_depth >= 0.99999 {
+        if sample_depth <= 0.00001 {
             continue;
         }
         let sample_uv = (vec2<f32>(sample_pixel) + 0.5) / vec2<f32>(size);
@@ -262,7 +280,7 @@ fn screen_space_occlusion(pixel: vec2<u32>, world_position: vec3<f32>, normal: v
             occlusion += horizon * (near_contact * 1.72 + broad_contact * 0.70 + floor_contact * near_contact * 0.58);
         }
     }
-    return clamp(1.0 - occlusion * 0.28, 0.14, 1.0);
+    return clamp(1.0 - occlusion * 0.46, 0.08, 1.0);
 }
 
 fn screen_space_contact_shadow(
@@ -309,10 +327,10 @@ fn screen_space_contact_shadow(
             vec2<i32>(size) - vec2<i32>(1)
         );
         let scene_depth = textureLoad(depth, sample_pixel_i, 0);
-        if scene_depth >= 0.99999 {
+        if scene_depth <= 0.00001 {
             continue;
         }
-        let depth_delta = sample_ndc.z - scene_depth;
+        let depth_delta = scene_depth - sample_ndc.z;
         if depth_delta <= 0.00014 {
             continue;
         }
@@ -338,7 +356,7 @@ fn screen_space_contact_shadow(
     }
     let averaged_occlusion = accumulated_occlusion / max(total_weight, 0.0001);
     let softened_occlusion = smoothstep(0.05, 0.72, mix(averaged_occlusion, strongest_occlusion, 0.42));
-    let contact_visibility = clamp(1.0 - softened_occlusion * strength, 0.55, 1.0);
+    let contact_visibility = clamp(1.0 - softened_occlusion * strength, 0.42, 1.0);
     return mix(1.0, contact_visibility, receiver_contact_gate);
 }
 
@@ -346,7 +364,7 @@ fn shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_directi
     let light_clip = light_camera.view_projection * vec4<f32>(world_position + normal * 0.018, 1.0);
     let light_ndc = light_clip.xyz / max(light_clip.w, 0.00001);
     let uv = light_ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || light_ndc.z >= 1.0 {
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || light_ndc.z <= 0.0 || light_ndc.z >= 1.0 {
         return 1.0;
     }
     let texel = 1.0 / vec2<f32>(textureDimensions(shadow_map));
@@ -363,7 +381,7 @@ fn shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_directi
                 shadow_map,
                 shadow_sampler,
                 uv + offset * texel * filter_radius,
-                light_ndc.z - bias
+                light_ndc.z + bias
             ) * weight;
             total_weight += weight;
         }
@@ -434,7 +452,7 @@ fn local_shadow_visibility(world_position: vec3<f32>, normal: vec3<f32>, light_i
                 shadow_sampler,
                 uv + offset * texel * 5.25,
                 layer,
-                light_ndc.z - 0.0015
+                light_ndc.z + 0.0015
             ) * weight;
             total_weight += weight;
         }
@@ -498,14 +516,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let size = textureDimensions(albedo);
     let pixel = min(vec2<u32>(input.position.xy), size - vec2<u32>(1u));
     let scene_depth = textureLoad(depth, vec2<i32>(pixel), 0);
-    if scene_depth >= 0.99999 {
-        return vec4<f32>(sky_radiance(input.uv), 1.0);
+    if scene_depth <= 0.00001 {
+        let sky = sky_radiance(input.uv);
+        return vec4<f32>(sky, max(luminance(sky), 0.0001));
     }
 
     let surface_raw = textureLoad(pbr, vec2<i32>(pixel), 0);
     let normal_flags = textureLoad(normals, vec2<i32>(pixel), 0);
     let normal = normalize(normal_flags.xyz);
-    let glass_mask = smoothstep(0.85, 1.0, normal_flags.w);
+    let material_flags = u32(round(normal_flags.w));
+    let glass_mask = f32(material_flags & 1u);
     let world_position = reconstruct_world_position(input.uv, scene_depth);
     let wetness = rain_wetness(world_position, normal, surface_raw, camera.position_time.w);
     let impact = procedural_rain_impacts(world_position, normal, surface_raw, camera.position_time.w);
@@ -529,8 +549,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let light_direction = safe_normalize(lights.directional_direction_count.xyz);
     let view_direction = safe_normalize(camera.position_time.xyz - world_position);
     let ssao = screen_space_occlusion(pixel, world_position, normal);
-    let contact_visibility = mix(ssao, 1.0, 0.62);
-    let ambient = lights.ambient.rgb * (0.48 + max(normal.y, 0.0) * 0.52);
+    let contact_visibility = mix(ssao, 1.0, 0.16);
+    let ambient = lights.ambient.rgb * (0.18 + max(normal.y, 0.0) * 0.30);
     let sun_shadow = shadow_visibility(world_position, normal, light_direction);
     let transparent_diffuse_weight = mix(1.0, 0.24 + opacity * 0.18, glass_mask);
     var hdr = base
@@ -540,11 +560,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         * effective_surface.z
         * transparent_diffuse_weight
         * (1.0 - emissive_mask * 0.85);
+    var diffuse_illuminance = max(luminance(ambient) * ssao, 0.0001);
     if lights.directional_color_intensity.w > 0.0 && length(light_direction) > 0.0 {
         let directional_contact =
-            screen_space_contact_shadow(pixel, world_position, normal, light_direction, 1.35, 0.40);
+            screen_space_contact_shadow(pixel, world_position, normal, light_direction, 1.85, 0.58);
         let directional_radiance =
             lights.directional_color_intensity.rgb * lights.directional_color_intensity.w * sun_shadow * directional_contact;
+        diffuse_illuminance += luminance(directional_radiance)
+            * max(dot(normal, light_direction), 0.0) * contact_visibility;
         hdr += shade_light(base, normal, view_direction, effective_surface, wetness, light_direction, directional_radiance)
             * contact_visibility;
     }
@@ -577,17 +600,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 local_shadow_weight
             );
         }
-        let shadowed_region_lift = 1.0 + (1.0 - sun_shadow) * 0.34;
+        let shadowed_region_lift = 1.0 + (1.0 - sun_shadow) * 0.12;
         let local_contact = screen_space_contact_shadow(
             pixel,
             world_position,
             normal,
             local_direction,
             clamp(distance_to_light * 0.42, 0.42, 1.45),
-            0.34
+            0.46
         );
         let local_radiance =
             color_intensity.rgb * color_intensity.w * attenuation * spot * local_shadow * local_contact * shadowed_region_lift;
+        diffuse_illuminance += luminance(local_radiance)
+            * max(dot(normal, local_direction), 0.0) * contact_visibility;
         hdr += shade_light(base, normal, view_direction, effective_surface, wetness, local_direction, local_radiance)
             * contact_visibility;
         let opposite_side_fill = 1.0 + (1.0 - max(dot(normal, local_direction), 0.0)) * 0.50;
@@ -640,9 +665,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         * rain_light_mask
         * (0.10 + wetness * 0.18);
     hdr += impact_light;
-    let fog = smoothstep(0.86, 1.0, scene_depth);
-    hdr = mix(hdr, vec3<f32>(0.030, 0.052, 0.075), fog * 0.22);
+    let fog = smoothstep(0.86, 1.0, 1.0 - scene_depth);
+    hdr = mix(hdr, vec3<f32>(0.030, 0.052, 0.075), fog * 0.10);
     let vignette_distance = distance(input.uv, vec2<f32>(0.5));
     let vignette = 1.0 - smoothstep(0.42, 0.78, vignette_distance) * 0.42;
-    return vec4<f32>(max(hdr * vignette, vec3<f32>(0.0)), 1.0);
+    return vec4<f32>(max(hdr * vignette, vec3<f32>(0.0)), diffuse_illuminance);
 }

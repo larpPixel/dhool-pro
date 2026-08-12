@@ -6,15 +6,17 @@ use crate::scene::{
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3 as GpuVec3};
 use std::fmt;
+use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu::util::{DeviceExt, TextureDataOrder};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
@@ -35,6 +37,7 @@ const CAMERA_FAST_MULTIPLIER: f32 = 3.5;
 const CAMERA_LOOK_SPEED: f32 = 1.55;
 const CAMERA_MOUSE_LOOK_SPEED: f32 = 0.0025;
 const GENERATED_RAIN_STREAK_DETAIL: &str = "assets/aaa/rain/generated_streak_detail.png";
+const DUST2_SKYBOX_TEXTURE: &str = "assets/dust2/generated/cs2/materials/skybox/sky_de_dust2.png";
 const RAIN_DROP_COUNT: u32 = 4_096;
 const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
 const MAX_GPU_POINT_LIGHTS: usize = 6;
@@ -45,6 +48,7 @@ const BLOOM_SCALE: u32 = 4;
 const HIZ_SCALE: u32 = 2;
 const FOG_SCALE: u32 = 2;
 const SSR_SCALE: u32 = 2;
+const REVERSE_Z_CLEAR_DEPTH: f32 = 0.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveOptions {
@@ -53,6 +57,7 @@ pub struct LiveOptions {
     pub max_frames: Option<u64>,
     pub width: u32,
     pub height: u32,
+    pub capture_path: Option<PathBuf>,
 }
 
 pub fn run_live_renderer(options: LiveOptions) -> Result<(), LiveError> {
@@ -75,6 +80,7 @@ pub enum LiveError {
     Surface(String),
     AdapterUnavailable,
     Device(String),
+    Capture(String),
 }
 
 impl fmt::Display for LiveError {
@@ -85,6 +91,7 @@ impl fmt::Display for LiveError {
             Self::Surface(message) => write!(formatter, "surface error: {message}"),
             Self::AdapterUnavailable => write!(formatter, "no compatible GPU adapter"),
             Self::Device(message) => write!(formatter, "GPU device error: {message}"),
+            Self::Capture(message) => write!(formatter, "capture error: {message}"),
         }
     }
 }
@@ -123,6 +130,7 @@ impl LiveApplication {
 
 impl ApplicationHandler for LiveApplication {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(ControlFlow::Poll);
         if self.window.is_some() {
             return;
         }
@@ -140,6 +148,7 @@ impl ApplicationHandler for LiveApplication {
             window.clone(),
             self.options.asset.clone(),
             self.options.map.clone(),
+            self.options.capture_path.clone(),
         )) {
             Ok(renderer) => renderer,
             Err(error) => {
@@ -229,6 +238,7 @@ impl ApplicationHandler for LiveApplication {
                 let elapsed = self.title_clock.elapsed();
                 if elapsed >= Duration::from_secs(1) {
                     let fps = self.title_frames as f64 / elapsed.as_secs_f64();
+                    println!("live FPS: {fps:.1}");
                     window.set_title(&format!(
                         "Dhool Pro | {} | {:.0} FPS | compute RT + HDR bloom + 3D rain + SMAA T2x",
                         renderer.adapter.name, fps
@@ -264,6 +274,12 @@ impl ApplicationHandler for LiveApplication {
             renderer.apply_mouse_delta(delta);
         }
     }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
 }
 
 #[repr(C)]
@@ -272,7 +288,7 @@ struct GpuVertex {
     position: [f32; 3],
     normal: [f32; 3],
     uv: [f32; 2],
-    color: [f32; 4],
+    color: [u8; 4],
     tangent: [f32; 4],
 }
 
@@ -281,7 +297,7 @@ impl GpuVertex {
         0 => Float32x3,
         1 => Float32x3,
         2 => Float32x2,
-        3 => Float32x4,
+        3 => Unorm8x4,
         4 => Float32x4
     ];
 
@@ -445,6 +461,21 @@ impl LightUniform {
     }
 }
 
+fn live_skybox_texture_for_map(
+    map: Option<&str>,
+    scene: &RenderScene,
+) -> Result<TextureImage, LiveError> {
+    if map == Some("dust2") {
+        let path = PathBuf::from(DUST2_SKYBOX_TEXTURE);
+        if path.is_file() {
+            return TextureImage::from_path(&path)
+                .map_err(|message| LiveError::Scene(format!("{}: {message}", path.display())));
+        }
+    }
+
+    Ok(solid_texture(scene.sky_color))
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct LocalShadowUniform {
@@ -574,6 +605,7 @@ struct GBuffer {
     _rt_history_b: wgpu::Texture,
     _volumetric_fog: wgpu::Texture,
     _lighting_hdr: wgpu::Texture,
+    _exposure_white_balance: wgpu::Texture,
     _bloom_a: wgpu::Texture,
     _bloom_b: wgpu::Texture,
     _tone_mapped: wgpu::Texture,
@@ -581,6 +613,9 @@ struct GBuffer {
     _smaa_blend: wgpu::Texture,
     _aa_history_a: wgpu::Texture,
     _aa_history_b: wgpu::Texture,
+    _skybox_texture: wgpu::Texture,
+    _skybox_view: wgpu::TextureView,
+    _skybox_sampler: wgpu::Sampler,
     albedo: wgpu::TextureView,
     normal: wgpu::TextureView,
     pbr: wgpu::TextureView,
@@ -590,6 +625,7 @@ struct GBuffer {
     _hiz_view: wgpu::TextureView,
     _ssr_view: wgpu::TextureView,
     lighting_hdr: wgpu::TextureView,
+    exposure_white_balance_bind_group: wgpu::BindGroup,
     bloom_a: wgpu::TextureView,
     bloom_b: wgpu::TextureView,
     tone_mapped: wgpu::TextureView,
@@ -663,6 +699,7 @@ struct GpuRenderer {
     ssr_pipeline: wgpu::ComputePipeline,
     reflection_pipeline: wgpu::ComputePipeline,
     lighting_pipeline: wgpu::RenderPipeline,
+    auto_exposure_pipeline: wgpu::ComputePipeline,
     bloom_extract_pipeline: wgpu::RenderPipeline,
     bloom_blur_horizontal_pipeline: wgpu::RenderPipeline,
     bloom_blur_vertical_pipeline: wgpu::RenderPipeline,
@@ -674,6 +711,7 @@ struct GpuRenderer {
     rain: RainTextures,
     reflection_layout: wgpu::BindGroupLayout,
     lighting_layout: wgpu::BindGroupLayout,
+    auto_exposure_layout: wgpu::BindGroupLayout,
     bloom_layout: wgpu::BindGroupLayout,
     tonemap_layout: wgpu::BindGroupLayout,
     depth_copy_layout: wgpu::BindGroupLayout,
@@ -699,6 +737,9 @@ struct GpuRenderer {
     keys: CameraKeys,
     mouse_look: bool,
     base_light_uniform: LightUniform,
+    skybox_texture: TextureImage,
+    display_fps: f32,
+    frame_capture: Option<FrameCapture>,
 }
 
 enum RenderResult {
@@ -708,11 +749,27 @@ enum RenderResult {
     Fatal(String),
 }
 
+struct FrameCapture {
+    path: PathBuf,
+    written: bool,
+}
+
+struct PendingFrameCapture {
+    path: PathBuf,
+    buffer: wgpu::Buffer,
+    width: u32,
+    height: u32,
+    unpadded_bytes_per_row: u32,
+    padded_bytes_per_row: u32,
+    format: wgpu::TextureFormat,
+}
+
 impl GpuRenderer {
     async fn new(
         window: Arc<Window>,
         asset: PathBuf,
         map: Option<String>,
+        capture_path: Option<PathBuf>,
     ) -> Result<Self, LiveError> {
         let scene = match map.as_deref() {
             Some("dust2") => build_dust2_scene(PathBuf::from("assets/dust2")),
@@ -760,6 +817,9 @@ impl GpuRenderer {
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .ok_or_else(|| LiveError::Surface("adapter cannot present to window".to_string()))?;
         config.present_mode = wgpu::PresentMode::AutoVsync;
+        if capture_path.is_some() {
+            config.usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         surface.configure(&device, &config);
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -769,6 +829,7 @@ impl GpuRenderer {
         let material_layout = material_layout(&device);
         let reflection_layout = reflection_layout(&device);
         let lighting_layout = lighting_layout(&device);
+        let auto_exposure_layout = auto_exposure_layout(&device);
         let bloom_layout = bloom_layout(&device);
         let tonemap_layout = tonemap_layout(&device);
         let depth_copy_layout = depth_copy_layout(&device);
@@ -805,6 +866,7 @@ impl GpuRenderer {
         });
         let (vertices, indices, batches) = flatten_scene(&scene);
         let light_uniform = LightUniform::from_scene(&scene);
+        let skybox_texture = live_skybox_texture_for_map(map.as_deref(), &scene)?;
         let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene-light-uniform"),
             contents: bytemuck::bytes_of(&light_uniform),
@@ -817,7 +879,7 @@ impl GpuRenderer {
                 contents: bytemuck::bytes_of(&reflection_proxy_uniform),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let shadow_camera = shadow_camera_for_scene(light_uniform, &vertices);
+        let shadow_camera = shadow_camera_for_scene(light_uniform, &scene, &vertices);
         let shadow_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("shadow-camera-uniform"),
             contents: bytemuck::bytes_of(&shadow_camera),
@@ -917,6 +979,7 @@ impl GpuRenderer {
         let ssr_pipeline = create_ssr_pipeline(&device, &ssr_layout);
         let reflection_pipeline = create_reflection_pipeline(&device, &reflection_layout);
         let lighting_pipeline = create_lighting_pipeline(&device, &lighting_layout);
+        let auto_exposure_pipeline = create_auto_exposure_pipeline(&device, &auto_exposure_layout);
         let bloom_extract_pipeline =
             create_bloom_pipeline(&device, &bloom_layout, bloom_format, "fs_extract");
         let bloom_blur_horizontal_pipeline =
@@ -930,12 +993,14 @@ impl GpuRenderer {
         let aa_pipeline = create_aa_pipeline(&device, &aa_layout, config.format);
         let gbuffer = GBuffer::new(
             &device,
+            &queue,
             config.width,
             config.height,
             config.format,
             bloom_format,
             &reflection_layout,
             &lighting_layout,
+            &auto_exposure_layout,
             &bloom_layout,
             &tonemap_layout,
             &depth_copy_layout,
@@ -955,6 +1020,7 @@ impl GpuRenderer {
             &reflection_proxy_buffer,
             &local_shadow_array_view,
             &local_shadow_buffer,
+            &skybox_texture,
         );
 
         Ok(Self {
@@ -997,6 +1063,7 @@ impl GpuRenderer {
             ssr_pipeline,
             reflection_pipeline,
             lighting_pipeline,
+            auto_exposure_pipeline,
             bloom_extract_pipeline,
             bloom_blur_horizontal_pipeline,
             bloom_blur_vertical_pipeline,
@@ -1008,6 +1075,7 @@ impl GpuRenderer {
             rain,
             reflection_layout,
             lighting_layout,
+            auto_exposure_layout,
             bloom_layout,
             tonemap_layout,
             depth_copy_layout,
@@ -1033,6 +1101,12 @@ impl GpuRenderer {
             keys: CameraKeys::default(),
             mouse_look: false,
             base_light_uniform: light_uniform,
+            skybox_texture,
+            display_fps: 0.0,
+            frame_capture: capture_path.map(|path| FrameCapture {
+                path,
+                written: false,
+            }),
         })
     }
 
@@ -1046,12 +1120,14 @@ impl GpuRenderer {
         self.surface.configure(&self.device, &self.config);
         self.gbuffer = GBuffer::new(
             &self.device,
+            &self.queue,
             size.width,
             size.height,
             self.config.format,
             self.bloom_format,
             &self.reflection_layout,
             &self.lighting_layout,
+            &self.auto_exposure_layout,
             &self.bloom_layout,
             &self.tonemap_layout,
             &self.depth_copy_layout,
@@ -1071,6 +1147,7 @@ impl GpuRenderer {
             &self._reflection_proxy_buffer,
             &self.local_shadow_array_view,
             &self.local_shadow_buffer,
+            &self.skybox_texture,
         );
     }
 
@@ -1194,11 +1271,19 @@ impl GpuRenderer {
             .as_secs_f32()
             .clamp(0.0, 0.05);
         self.last_update = now;
+        if dt > 0.0001 {
+            let instant_fps = (1.0 / dt).clamp(0.0, 999.0);
+            self.display_fps = if self.display_fps > 0.0 {
+                self.display_fps * 0.90 + instant_fps * 0.10
+            } else {
+                instant_fps
+            };
+        }
         let elapsed = self.started.elapsed().as_secs_f32();
         self.apply_manual_camera(dt);
         let (eye, target) = self.camera_pose(elapsed);
         let view = Mat4::look_at_rh(eye, target, GpuVec3::Y);
-        let projection = Mat4::perspective_rh(
+        let projection = perspective_reverse_rh(
             self.camera_fov_y,
             self.config.width as f32 / self.config.height as f32,
             self.camera_near,
@@ -1240,7 +1325,7 @@ impl GpuRenderer {
                 if self.frame_index == 0 { 0.0 } else { 0.16 },
                 0.045,
                 0.42,
-                0.0,
+                self.display_fps.clamp(0.0, 999.0),
             ],
         };
         let lights = self.base_light_uniform.realtime(elapsed);
@@ -1285,7 +1370,7 @@ impl GpuRenderer {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &self.shadow_view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(REVERSE_Z_CLEAR_DEPTH),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -1330,7 +1415,7 @@ impl GpuRenderer {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(REVERSE_Z_CLEAR_DEPTH),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -1361,7 +1446,7 @@ impl GpuRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.gbuffer.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(REVERSE_Z_CLEAR_DEPTH),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -1517,7 +1602,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -1532,6 +1617,16 @@ impl GpuRenderer {
             pass.set_pipeline(&self.lighting_pipeline);
             pass.set_bind_group(0, &self.gbuffer.lighting_bind_group, &[]);
             pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("diffuse-luminance-auto-exposure-white-balance"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.auto_exposure_pipeline);
+            pass.set_bind_group(0, &self.gbuffer.exposure_white_balance_bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
         }
 
         {
@@ -1570,7 +1665,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -1593,7 +1688,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -1616,7 +1711,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -1639,7 +1734,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -1704,7 +1799,7 @@ impl GpuRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -1713,7 +1808,7 @@ impl GpuRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -1731,23 +1826,168 @@ impl GpuRenderer {
             pass.draw(0..3, 0..1);
         }
 
+        let pending_capture = if self
+            .frame_capture
+            .as_ref()
+            .is_some_and(|capture| !capture.written)
+            && self.frame_index >= 30
+        {
+            self.frame_capture.as_ref().map(|capture| {
+                copy_presented_frame_to_buffer(
+                    &self.device,
+                    &mut encoder,
+                    &frame.texture,
+                    self.config.width,
+                    self.config.height,
+                    self.config.format,
+                    capture.path.clone(),
+                )
+            })
+        } else {
+            None
+        };
+
         self.queue.submit(Some(encoder.finish()));
+        if let Some(pending_capture) = pending_capture {
+            if let Err(message) = write_pending_frame_capture(&self.device, pending_capture) {
+                frame.present();
+                return RenderResult::Fatal(message);
+            }
+            if let Some(capture) = &mut self.frame_capture {
+                capture.written = true;
+            }
+        }
         frame.present();
         self.frame_index = self.frame_index.wrapping_add(1);
         RenderResult::Presented
     }
 }
 
+fn copy_presented_frame_to_buffer(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    path: PathBuf,
+) -> PendingFrameCapture {
+    let bytes_per_pixel = 4;
+    let unpadded_bytes_per_row = width * bytes_per_pixel;
+    let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(256) * 256;
+    let buffer_size = padded_bytes_per_row as u64 * height as u64;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("live-frame-capture-readback"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    PendingFrameCapture {
+        path,
+        buffer,
+        width,
+        height,
+        unpadded_bytes_per_row,
+        padded_bytes_per_row,
+        format,
+    }
+}
+
+fn write_pending_frame_capture(
+    device: &wgpu::Device,
+    capture: PendingFrameCapture,
+) -> Result<(), String> {
+    let (sender, receiver) = mpsc::channel();
+    capture
+        .buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|error| error.to_string())?;
+    receiver
+        .recv()
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+
+    let view = capture.buffer.slice(..).get_mapped_range();
+    let mut rgba = vec![0_u8; (capture.width * capture.height * 4) as usize];
+    for y in 0..capture.height as usize {
+        let source_start = y * capture.padded_bytes_per_row as usize;
+        let source_end = source_start + capture.unpadded_bytes_per_row as usize;
+        let dest_start = y * capture.width as usize * 4;
+        let dest_end = dest_start + capture.width as usize * 4;
+        let source_row = &view[source_start..source_end];
+        let dest_row = &mut rgba[dest_start..dest_end];
+        match capture.format {
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
+                for (source, dest) in source_row.chunks_exact(4).zip(dest_row.chunks_exact_mut(4)) {
+                    dest[0] = source[2];
+                    dest[1] = source[1];
+                    dest[2] = source[0];
+                    dest[3] = source[3];
+                }
+            }
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
+                dest_row.copy_from_slice(source_row);
+            }
+            other => {
+                return Err(format!("unsupported capture surface format {other:?}"));
+            }
+        }
+    }
+    drop(view);
+    capture.buffer.unmap();
+
+    if let Some(parent) = capture
+        .path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    image::save_buffer(
+        &capture.path,
+        &rgba,
+        capture.width,
+        capture.height,
+        image::ColorType::Rgba8,
+    )
+    .map_err(|error| error.to_string())?;
+    println!("captured live frame {}", capture.path.display());
+    Ok(())
+}
+
 impl GBuffer {
     #[allow(clippy::too_many_arguments)]
     fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         width: u32,
         height: u32,
         surface_format: wgpu::TextureFormat,
         bloom_format: wgpu::TextureFormat,
         reflection_layout: &wgpu::BindGroupLayout,
         lighting_layout: &wgpu::BindGroupLayout,
+        auto_exposure_layout: &wgpu::BindGroupLayout,
         bloom_layout: &wgpu::BindGroupLayout,
         tonemap_layout: &wgpu::BindGroupLayout,
         depth_copy_layout: &wgpu::BindGroupLayout,
@@ -1767,6 +2007,7 @@ impl GBuffer {
         reflection_proxy_buffer: &wgpu::Buffer,
         local_shadow_view: &wgpu::TextureView,
         local_shadow_buffer: &wgpu::Buffer,
+        skybox_texture: &TextureImage,
     ) -> Self {
         let (albedo_texture, albedo) =
             render_texture(device, "gbuffer-albedo", width, height, ALBEDO_FORMAT);
@@ -1808,6 +2049,8 @@ impl GBuffer {
         );
         let (lighting_texture, lighting_hdr) =
             render_texture(device, "hdr-lighting-rgba16f", width, height, HDR_FORMAT);
+        let (exposure_texture, exposure_white_balance) =
+            storage_texture(device, "auto-exposure-white-balance-1x1", 1, 1, HDR_FORMAT);
         let bloom_width = width.div_ceil(BLOOM_SCALE).max(1);
         let bloom_height = height.div_ceil(BLOOM_SCALE).max(1);
         let (bloom_texture_a, bloom_a) = render_texture(
@@ -1844,6 +2087,22 @@ impl GBuffer {
             render_texture(device, "smaa-t2x-history-a", width, height, surface_format);
         let (history_texture_b, aa_history_b) =
             render_texture(device, "smaa-t2x-history-b", width, height, surface_format);
+        let (skybox_gpu_texture, skybox_view) = upload_material_texture(
+            device,
+            queue,
+            "lighting-skybox-panorama",
+            skybox_texture,
+            true,
+        );
+        let skybox_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("lighting-skybox-linear-repeat"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
         let reflection_width = ((width * 7) / 10).max(1);
         let reflection_height = ((height * 7) / 10).max(1);
         let reflection_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1985,6 +2244,11 @@ impl GBuffer {
                     binding: 11,
                     resource: local_shadow_buffer.as_entire_binding(),
                 },
+                texture_entry(12, &skybox_view),
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::Sampler(&skybox_sampler),
+                },
             ],
         });
         let bloom_extract_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1992,6 +2256,19 @@ impl GBuffer {
             layout: bloom_layout,
             entries: &[texture_entry(0, &lighting_hdr)],
         });
+        let exposure_white_balance_bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("auto-exposure-white-balance-bind-group"),
+                layout: auto_exposure_layout,
+                entries: &[
+                    texture_entry(0, &lighting_hdr),
+                    texture_entry(1, &exposure_white_balance),
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: light_buffer.as_entire_binding(),
+                    },
+                ],
+            });
         let bloom_blur_a_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bloom-blur-a-bind-group"),
             layout: bloom_layout,
@@ -2009,6 +2286,7 @@ impl GBuffer {
                 texture_entry(0, &lighting_hdr),
                 texture_entry(1, &bloom_a),
                 texture_entry(2, &volumetric_fog),
+                texture_entry(3, &exposure_white_balance),
             ],
         });
         let depth_copy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2079,6 +2357,7 @@ impl GBuffer {
                 },
                 texture_entry(5, &motion),
                 texture_entry(6, &smaa_blend),
+                texture_entry(7, &normal),
             ],
         });
         let aa_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2098,6 +2377,7 @@ impl GBuffer {
                 },
                 texture_entry(5, &motion),
                 texture_entry(6, &smaa_blend),
+                texture_entry(7, &normal),
             ],
         });
         Self {
@@ -2114,6 +2394,7 @@ impl GBuffer {
             _rt_history_b: rt_history_texture_b,
             _volumetric_fog: fog_texture,
             _lighting_hdr: lighting_texture,
+            _exposure_white_balance: exposure_texture,
             _bloom_a: bloom_texture_a,
             _bloom_b: bloom_texture_b,
             _tone_mapped: tone_texture,
@@ -2121,6 +2402,9 @@ impl GBuffer {
             _smaa_blend: smaa_blend_texture,
             _aa_history_a: history_texture_a,
             _aa_history_b: history_texture_b,
+            _skybox_texture: skybox_gpu_texture,
+            _skybox_view: skybox_view,
+            _skybox_sampler: skybox_sampler,
             albedo,
             normal,
             pbr,
@@ -2130,6 +2414,7 @@ impl GBuffer {
             _hiz_view: hiz,
             _ssr_view: ssr,
             lighting_hdr,
+            exposure_white_balance_bind_group,
             bloom_a,
             bloom_b,
             tone_mapped,
@@ -2200,7 +2485,49 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut batches = Vec::new();
-    for mesh in &scene.meshes {
+    let mut meshes: Vec<_> = scene.meshes.iter().collect();
+    meshes.sort_by_key(|mesh| {
+        let material = &scene.materials[mesh.material_index];
+        let prepass_eligible = mesh.prepass_eligible && !material.flags.alpha_tested;
+        let casts_shadow =
+            !mesh.is_floor_or_ground && mesh.shadow_class != crate::asset::ShadowCasterClass::None;
+        (mesh.material_index, prepass_eligible, casts_shadow)
+    });
+
+    let mut active_batch: Option<(usize, bool, bool, u32)> = None;
+    for mesh in meshes {
+        let material = &scene.materials[mesh.material_index];
+        let prepass_eligible = mesh.prepass_eligible && !material.flags.alpha_tested;
+        let casts_shadow =
+            !mesh.is_floor_or_ground && mesh.shadow_class != crate::asset::ShadowCasterClass::None;
+        let batch_key = (mesh.material_index, prepass_eligible, casts_shadow);
+
+        if active_batch
+            .as_ref()
+            .is_some_and(|(material_index, prepass, shadow, _)| {
+                (*material_index, *prepass, *shadow) != batch_key
+            })
+        {
+            if let Some((material_index, prepass_eligible, casts_shadow, first_index)) =
+                active_batch.take()
+            {
+                batches.push(DrawBatch {
+                    indices: first_index..indices.len() as u32,
+                    material_index,
+                    prepass_eligible,
+                    casts_shadow,
+                });
+            }
+        }
+        if active_batch.is_none() {
+            active_batch = Some((
+                mesh.material_index,
+                prepass_eligible,
+                casts_shadow,
+                indices.len() as u32,
+            ));
+        }
+
         let base_vertex = vertices.len() as u32;
         for vertex in &mesh.vertices {
             let position = mesh.transform.mul_vec4(Vec4::new(
@@ -2228,15 +2555,14 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
                 normal: [normal.x, normal.y, normal.z],
                 uv: [vertex.uv.x, vertex.uv.y],
                 color: [
-                    vertex.color.r,
-                    vertex.color.g,
-                    vertex.color.b,
-                    vertex.color.a,
+                    color_channel_to_unorm8(vertex.color.r),
+                    color_channel_to_unorm8(vertex.color.g),
+                    color_channel_to_unorm8(vertex.color.b),
+                    color_channel_to_unorm8(vertex.color.a),
                 ],
                 tangent: [tangent.x, tangent.y, tangent.z, vertex.tangent_sign],
             });
         }
-        let first_index = indices.len() as u32;
         for triangle in &mesh.indices {
             indices.extend([
                 triangle[0] + base_vertex,
@@ -2244,16 +2570,20 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
                 triangle[2] + base_vertex,
             ]);
         }
+    }
+    if let Some((material_index, prepass_eligible, casts_shadow, first_index)) = active_batch {
         batches.push(DrawBatch {
             indices: first_index..indices.len() as u32,
-            material_index: mesh.material_index,
-            prepass_eligible: mesh.prepass_eligible
-                && !scene.materials[mesh.material_index].flags.alpha_tested,
-            casts_shadow: !mesh.is_floor_or_ground
-                && mesh.shadow_class != crate::asset::ShadowCasterClass::None,
+            material_index,
+            prepass_eligible,
+            casts_shadow,
         });
     }
     (vertices, indices, batches)
+}
+
+fn color_channel_to_unorm8(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn reflection_proxy_uniform(scene: &RenderScene) -> ReflectionProxyUniform {
@@ -2310,29 +2640,44 @@ fn reflection_proxy_uniform(scene: &RenderScene) -> ReflectionProxyUniform {
     uniform
 }
 
-fn shadow_camera_for_scene(lights: LightUniform, vertices: &[GpuVertex]) -> CameraUniform {
+fn shadow_camera_for_scene(
+    lights: LightUniform,
+    scene: &RenderScene,
+    vertices: &[GpuVertex],
+) -> CameraUniform {
     let surface_to_light = lights.surface_to_directional_light();
     let surface_to_light = if surface_to_light.length_squared() > 0.0 {
         surface_to_light
     } else {
         GpuVec3::new(0.35, 0.75, 0.45).normalize()
     };
+    let focus = GpuVec3::new(
+        scene.camera.target.x,
+        scene.camera.target.y,
+        scene.camera.target.z,
+    );
+    let focus_radius = (scene.camera.far * 0.22).clamp(8.0, 120.0);
     let mut min = GpuVec3::splat(f32::INFINITY);
     let mut max = GpuVec3::splat(f32::NEG_INFINITY);
+    let mut local_vertex_count = 0usize;
     for vertex in vertices {
         let position = GpuVec3::from_array(vertex.position);
+        if position.distance(focus) > focus_radius {
+            continue;
+        }
         min = min.min(position);
         max = max.max(position);
+        local_vertex_count += 1;
     }
-    if vertices.is_empty() {
+    if local_vertex_count == 0 {
         min = GpuVec3::new(-8.0, -1.0, -18.0);
         max = GpuVec3::new(8.0, 6.0, 6.0);
     }
     let center = (min + max) * 0.5;
-    let radius = ((max - min).length() * 0.55).max(8.0);
+    let radius = ((max - min).length() * 0.52).clamp(8.0, focus_radius);
     let eye = center + surface_to_light * (radius * 2.4);
     let view = Mat4::look_at_rh(eye, center, GpuVec3::Y);
-    let projection = Mat4::orthographic_rh(-radius, radius, -radius, radius, 0.1, radius * 4.8);
+    let projection = orthographic_reverse_rh(-radius, radius, -radius, radius, 0.1, radius * 4.8);
     let view_projection = projection * view;
     CameraUniform {
         view_projection: view_projection.to_cols_array_2d(),
@@ -2416,7 +2761,7 @@ fn spot_shadow_camera(
     };
     let view = Mat4::look_at_rh(eye, eye + direction, up);
     let fov = (outer_angle_radians * 2.0).clamp(20.0_f32.to_radians(), 135.0_f32.to_radians());
-    let projection = Mat4::perspective_rh(fov, 1.0, 0.05, radius.max(0.1));
+    let projection = perspective_reverse_rh(fov, 1.0, 0.05, radius.max(0.1));
     let view_projection = projection * view;
     CameraUniform {
         view_projection: view_projection.to_cols_array_2d(),
@@ -2432,6 +2777,28 @@ fn spot_shadow_camera(
     }
 }
 
+fn perspective_reverse_rh(fov_y_radians: f32, aspect_ratio: f32, near: f32, far: f32) -> Mat4 {
+    let f = 1.0 / (fov_y_radians * 0.5).tan();
+    let inverse_depth_range = 1.0 / (far - near);
+    Mat4::from_cols_array_2d(&[
+        [f / aspect_ratio, 0.0, 0.0, 0.0],
+        [0.0, f, 0.0, 0.0],
+        [0.0, 0.0, near * inverse_depth_range, -1.0],
+        [0.0, 0.0, far * near * inverse_depth_range, 0.0],
+    ])
+}
+
+fn orthographic_reverse_rh(
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    near: f32,
+    far: f32,
+) -> Mat4 {
+    Mat4::orthographic_rh(left, right, bottom, top, far, near)
+}
+
 fn create_material(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -2443,7 +2810,8 @@ fn create_material(
         .r
         .max(material.emission.g)
         .max(material.emission.b);
-    let material_flag = if material.flags.glass { 1.0 } else { 0.0 };
+    let material_flag =
+        u32::from(material.flags.glass) | (u32::from(material.flags.responsive_aa) << 1);
     let uniform = MaterialUniform {
         base_color: [
             material.base_color.r,
@@ -2455,7 +2823,7 @@ fn create_material(
             material.roughness,
             material.metallic,
             material.cavity,
-            material_flag,
+            material_flag as f32,
         ],
         emission: [
             material.emission.r,
@@ -2684,7 +3052,7 @@ fn create_depth_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -2721,11 +3089,11 @@ fn create_shadow_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState {
-                constant: 1,
-                slope_scale: 1.25,
+                constant: -1,
+                slope_scale: -1.25,
                 clamp: 0.0,
             },
         }),
@@ -2764,7 +3132,7 @@ fn create_geometry_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -2931,6 +3299,26 @@ fn create_lighting_pipeline(
     })
 }
 
+fn create_auto_exposure_pipeline(
+    device: &wgpu::Device,
+    auto_exposure_layout: &wgpu::BindGroupLayout,
+) -> wgpu::ComputePipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/auto_exposure.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("auto-exposure-white-balance-pipeline-layout"),
+        bind_group_layouts: &[Some(auto_exposure_layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("diffuse-luminance-auto-exposure-white-balance"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("cs_main"),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        cache: None,
+    })
+}
+
 fn create_bloom_pipeline(
     device: &wgpu::Device,
     bloom_layout: &wgpu::BindGroupLayout,
@@ -3028,7 +3416,7 @@ fn create_rain_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -3215,6 +3603,13 @@ fn lighting_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             uniform_entry(9, wgpu::ShaderStages::FRAGMENT),
             depth_array_layout_entry(10, wgpu::ShaderStages::FRAGMENT),
             uniform_entry(11, wgpu::ShaderStages::FRAGMENT),
+            sampled_texture_layout_entry(12, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 13,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     })
 }
@@ -3280,6 +3675,18 @@ fn tonemap_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             unfiltered_texture_layout_entry(0, wgpu::ShaderStages::FRAGMENT),
             unfiltered_texture_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
             unfiltered_texture_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
+            unfiltered_texture_layout_entry(3, wgpu::ShaderStages::FRAGMENT),
+        ],
+    })
+}
+
+fn auto_exposure_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("auto-exposure-white-balance-layout"),
+        entries: &[
+            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::COMPUTE),
+            storage_texture_layout_entry(1, wgpu::ShaderStages::COMPUTE, HDR_FORMAT),
+            uniform_entry(2, wgpu::ShaderStages::COMPUTE),
         ],
     })
 }
@@ -3318,6 +3725,7 @@ fn aa_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
             unfiltered_texture_layout_entry(5, wgpu::ShaderStages::FRAGMENT),
             unfiltered_texture_layout_entry(6, wgpu::ShaderStages::FRAGMENT),
+            unfiltered_texture_layout_entry(7, wgpu::ShaderStages::FRAGMENT),
         ],
     })
 }
@@ -3558,7 +3966,7 @@ fn create_shadow_map(
         label: Some("shadow-comparison-sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
-        compare: Some(wgpu::CompareFunction::LessEqual),
+        compare: Some(wgpu::CompareFunction::GreaterEqual),
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
         ..wgpu::SamplerDescriptor::default()

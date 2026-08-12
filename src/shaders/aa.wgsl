@@ -18,6 +18,7 @@ struct AntiAlias {
 @group(0) @binding(4) var<uniform> aa: AntiAlias;
 @group(0) @binding(5) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(6) var smaa_blend: texture_2d<f32>;
+@group(0) @binding(7) var normal_flags: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -82,6 +83,84 @@ fn smaa_resolve(pixel: vec2<i32>, size: vec2<u32>, center: vec3<f32>) -> vec3<f3
     return mix(horizontal, vertical, blend.y / max(blend.x + blend.y, 0.0001));
 }
 
+fn fps_glyph_mask(glyph: u32) -> u32 {
+    switch glyph {
+        case 0u: { return 0x7b6fu; }
+        case 1u: { return 0x749au; }
+        case 2u: { return 0x73e7u; }
+        case 3u: { return 0x79e7u; }
+        case 4u: { return 0x49edu; }
+        case 5u: { return 0x79cfu; }
+        case 6u: { return 0x7bcfu; }
+        case 7u: { return 0x24a7u; }
+        case 8u: { return 0x7befu; }
+        case 9u: { return 0x79efu; }
+        case 10u: { return 0x13cfu; }
+        case 11u: { return 0x12ebu; }
+        case 12u: { return 0x79cfu; }
+        default: { return 0u; }
+    }
+}
+
+fn fps_overlay_glyph(slot: i32, fps: u32) -> u32 {
+    if slot == 0 {
+        return 10u;
+    }
+    if slot == 1 {
+        return 11u;
+    }
+    if slot == 2 {
+        return 12u;
+    }
+    if slot == 4 {
+        return fps / 100u;
+    }
+    if slot == 5 {
+        return (fps / 10u) % 10u;
+    }
+    if slot == 6 {
+        return fps % 10u;
+    }
+    return 99u;
+}
+
+fn fps_overlay_coverage(pixel: vec2<i32>) -> f32 {
+    let scale = 3;
+    let glyph_size = vec2<i32>(3 * scale, 5 * scale);
+    let gap = 2 * scale;
+    let origin = vec2<i32>(14, 14);
+    let local = pixel - origin;
+    if any(local < vec2<i32>(0)) {
+        return 0.0;
+    }
+    let stride = glyph_size.x + gap;
+    let slot = local.x / stride;
+    if slot < 0 || slot > 6 || local.y >= glyph_size.y {
+        return 0.0;
+    }
+    let glyph_local = vec2<i32>(local.x - slot * stride, local.y);
+    if glyph_local.x >= glyph_size.x {
+        return 0.0;
+    }
+    let cell = glyph_local / scale;
+    let glyph = fps_overlay_glyph(slot, u32(clamp(aa.params.w + 0.5, 0.0, 999.0)));
+    let mask = fps_glyph_mask(glyph);
+    let bit_index = u32(cell.y * 3 + cell.x);
+    return f32((mask >> bit_index) & 1u);
+}
+
+fn apply_fps_overlay(color: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
+    let panel_origin = vec2<i32>(9, 9);
+    let panel_size = vec2<i32>(96, 27);
+    let in_panel = all(pixel >= panel_origin) && all(pixel < panel_origin + panel_size);
+    var output = color;
+    if in_panel {
+        output = mix(output, vec3<f32>(0.012, 0.016, 0.012), 0.58);
+    }
+    let glyph = fps_overlay_coverage(pixel);
+    return mix(output, vec3<f32>(1.0, 0.82, 0.34), glyph);
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> FragmentOutput {
     let size = textureDimensions(current_color);
@@ -89,10 +168,13 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     let pixel = vec2<i32>(pixel_u);
     let center = textureLoad(current_color, pixel, 0).rgb;
     let depth = textureLoad(scene_depth, pixel, 0);
-    var resolved = smaa_resolve(pixel, size, center);
+    let spatial_resolve = smaa_resolve(pixel, size, center);
+    var resolved = spatial_resolve;
     let edge_strength = textureLoad(smaa_blend, pixel, 0).b;
+    let material_flags = u32(round(textureLoad(normal_flags, pixel, 0).w));
+    let responsive = (material_flags & 2u) != 0u;
 
-    if aa.params.x > 0.0 && depth < 0.99999 {
+    if aa.params.x > 0.0 && edge_strength > 0.0001 && depth > 0.00001 && !responsive {
         let uv = (vec2<f32>(pixel_u) + 0.5) / vec2<f32>(size);
         let motion = textureLoad(motion_vectors, pixel, 0).rg;
         let previous_uv = uv - motion;
@@ -104,15 +186,18 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
                 vec2<i32>(history_size) - vec2<i32>(1)
             );
             let history_sample = textureLoad(history_color, history_pixel, 0).rgb;
-            let low = neighborhood_min(pixel, size, resolved) - vec3<f32>(0.018);
-            let high = neighborhood_max(pixel, size, resolved) + vec3<f32>(0.018);
+            let low = neighborhood_min(pixel, size, spatial_resolve) - vec3<f32>(0.018);
+            let high = neighborhood_max(pixel, size, spatial_resolve) + vec3<f32>(0.018);
             let clamped_history = clamp(history_sample, low, high);
             let motion_rejection = smoothstep(0.012, 0.09, length(motion));
-            let history_weight = aa.params.x * (1.0 - edge_strength * 0.55) * (1.0 - motion_rejection * 0.65);
+            let history_weight = aa.params.x * edge_strength * (1.0 - motion_rejection * 0.65);
             resolved = mix(resolved, clamped_history, history_weight);
         }
     }
 
-    let output = vec4<f32>(resolved, 1.0);
-    return FragmentOutput(output, output);
+    let presented = apply_fps_overlay(resolved, pixel);
+    // History is the current frame's spatial SMAA result, never the temporally
+    // blended presentation. This keeps T2x to two frames instead of silently
+    // turning it into an accumulation buffer.
+    return FragmentOutput(vec4<f32>(presented, 1.0), vec4<f32>(spatial_resolve, edge_strength));
 }

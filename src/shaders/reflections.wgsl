@@ -237,14 +237,15 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
     );
     let scene_depth = textureLoad(depth, vec2<i32>(source_pixel), 0);
     let surface = textureLoad(pbr, vec2<i32>(source_pixel), 0);
-    if scene_depth >= 0.99999 {
+    if scene_depth <= 0.00001 {
         textureStore(output_reflection, vec2<i32>(invocation.xy), vec4<f32>(0.0));
         return;
     }
 
     let normal_flags = textureLoad(normals, vec2<i32>(source_pixel), 0);
     let normal = normalize(normal_flags.xyz);
-    let glass_mask = smoothstep(0.85, 1.0, normal_flags.w);
+    let material_flags = u32(round(normal_flags.w));
+    let glass_mask = f32(material_flags & 1u);
     let water_glass_mask = glass_mask * smoothstep(0.48, 0.82, normal.y);
     let upright_glass_mask = glass_mask * (1.0 - water_glass_mask);
     let uv = (vec2<f32>(source_pixel) + 0.5) / vec2<f32>(source_size);

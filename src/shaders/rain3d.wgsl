@@ -125,7 +125,7 @@ fn shadow_visibility(world_position: vec3<f32>) -> f32 {
     let light_clip = light_camera.view_projection * vec4<f32>(world_position, 1.0);
     let light_ndc = light_clip.xyz / max(light_clip.w, 0.00001);
     let uv = light_ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || light_ndc.z >= 1.0 {
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || light_ndc.z <= 0.0 || light_ndc.z >= 1.0 {
         return 1.0;
     }
     let texel = 1.0 / vec2<f32>(textureDimensions(shadow_map));
@@ -139,7 +139,7 @@ fn shadow_visibility(world_position: vec3<f32>) -> f32 {
                 shadow_map,
                 shadow_sampler,
                 uv + offset * texel * 5.0,
-                light_ndc.z - 0.0018
+                light_ndc.z + 0.0018
             ) * weight;
             total_weight += weight;
         }

@@ -40,18 +40,18 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         source_size - vec2<u32>(1u)
     );
     let scene_depth = textureLoad(depth_copy, vec2<i32>(source_pixel), 0).r;
-    let distance_fog = smoothstep(0.70, 1.0, scene_depth);
+    let distance_fog = smoothstep(0.70, 1.0, 1.0 - scene_depth);
     let rainfall = lights.weather.x;
     let gust_noise = hash(invocation.xy, frame.counters.x);
     let animated_noise = hash(invocation.yx + vec2<u32>(17u, 41u), frame.counters.x + 13u);
     let density = clamp(
-        distance_fog * (0.035 + rainfall * 0.115)
-            + (gust_noise - 0.5) * 0.014
-            + animated_noise * 0.010,
+        distance_fog * (0.018 + rainfall * 0.055)
+            + (gust_noise - 0.5) * 0.007
+            + animated_noise * 0.004,
         0.0,
-        0.28
+        0.13
     );
     let moon = lights.directional_color_intensity.rgb * lights.directional_color_intensity.w * 0.010;
-    let fog_color = lights.sky.rgb * 0.58 + lights.ambient.rgb * 1.08 + moon + vec3<f32>(0.006, 0.005, 0.004);
+    let fog_color = lights.sky.rgb * 0.38 + lights.ambient.rgb * 0.46 + moon + vec3<f32>(0.004, 0.003, 0.002);
     textureStore(fog_output, vec2<i32>(invocation.xy), vec4<f32>(fog_color, density));
 }

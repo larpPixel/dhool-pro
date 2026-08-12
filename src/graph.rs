@@ -490,6 +490,14 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         )
         .scaled(0.25, 0.25),
     );
+    let exposure_white_balance = graph.add_resource(
+        ResourceDesc::new(
+            "auto-exposure-white-balance-1x1",
+            Format::Rgba16,
+            ResourceKind::PostProcess,
+        )
+        .scaled(1.0 / 1920.0, 1.0 / 1080.0),
+    );
     let smaa_blend = graph.add_resource(ResourceDesc::new(
         "smaa-blend-mask-rgba16",
         Format::Rgba16,
@@ -685,6 +693,18 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
 
     graph.add_pass(
         RenderPassDesc::new(
+            "diffuse-luminance-auto-exposure-white-balance",
+            "post",
+            FeatureCategory::PostProcess,
+            0.2,
+        )
+        .read(lighting)
+        .write(exposure_white_balance)
+        .target_format(Format::Rgba16),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
             "kawase-bloom-chain",
             "post",
             FeatureCategory::PostProcess,
@@ -705,6 +725,7 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         .read(lighting)
         .read(volumetric_fog)
         .read(bloom)
+        .read(exposure_white_balance)
         .write(tone_mapped)
         .target_format(Format::Rgb10A2),
     );

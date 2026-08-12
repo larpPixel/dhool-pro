@@ -1,7 +1,8 @@
-# assets/dust2 — local CS2 Dust2 import
+# assets/dust2 - local CS2 Dust2 import
 
 The `--map dust2` scene now loads a local export from the user's licensed
-Counter-Strike 2 install instead of the old hand-authored placeholder layout.
+Counter-Strike 2 install instead of the old hand-authored placeholder layout or
+physics-only skeleton.
 The generated Valve-derived files live under `generated/cs2/`, which is ignored
 by git and must not be redistributed unless you have explicit rights to do so.
 
@@ -24,11 +25,17 @@ your Steam library is elsewhere.
 
 The script exports:
 
+- `generated/cs2/maps/de_dust2.glb`
+- `generated/cs2/maps/*.png` material textures exported beside the visual GLB
+- `generated/cs2/materials/skybox/sky_de_dust2.{vmat,exr,png}`
 - `generated/cs2/maps/de_dust2/world_physics_physics.glb`
 - `generated/cs2/manifest.json`
 
-`build_dust2_scene()` requires that local export and returns an error if it is
-missing; it no longer silently falls back to CC0 placeholder boxes.
+`build_dust2_scene()` prefers the visual `de_dust2.glb` export, caps decoded
+runtime texture size for memory safety, filters Source 2 tool/clip meshes, adds
+a Dust2 skybox shell when the converted skybox PNG exists, and retains the
+physics GLB only as a compatibility fallback. It no longer silently falls back
+to CC0 placeholder boxes.
 
 ## Roaming the map
 

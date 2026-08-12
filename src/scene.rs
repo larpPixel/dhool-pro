@@ -1,8 +1,11 @@
 use crate::asset::{
     MaterialDesc, MeshDesc, ShadowCasterClass, TextureDesc, TextureFormat, TextureRole,
 };
-use crate::gltf_import::{import_gltf, GltfImportError};
-use crate::math::{Color, Mat4, Vec2, Vec3};
+use crate::gltf_import::{
+    import_gltf, import_gltf_with_texture_limits_filter_budget_by_primitive, GltfImportBudget,
+    GltfImportError, GltfPrimitiveInfo, GltfTextureLimits,
+};
+use crate::math::{Color, Mat4, Vec2, Vec3, Vec4};
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +27,7 @@ pub struct MaterialFlags {
     pub receives_contact_shadows: bool,
     pub alpha_tested: bool,
     pub uses_bent_normals: bool,
+    pub responsive_aa: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,7 +57,38 @@ pub struct TextureImage {
 
 impl TextureImage {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, String> {
+        Self::from_path_with_max_dimension(path, 0)
+    }
+
+    pub fn from_path_with_max_dimension(
+        path: impl AsRef<Path>,
+        max_dimension: u32,
+    ) -> Result<Self, String> {
         let image = image::open(path.as_ref()).map_err(|error| error.to_string())?;
+        Self::from_dynamic_image(image, max_dimension)
+    }
+
+    pub fn from_encoded_bytes_with_max_dimension(
+        bytes: &[u8],
+        max_dimension: u32,
+    ) -> Result<Self, String> {
+        let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+        Self::from_dynamic_image(image, max_dimension)
+    }
+
+    fn from_dynamic_image(
+        mut image: image::DynamicImage,
+        max_dimension: u32,
+    ) -> Result<Self, String> {
+        if max_dimension > 0 {
+            let largest = image.width().max(image.height());
+            if largest > max_dimension {
+                let scale = max_dimension as f32 / largest as f32;
+                let width = ((image.width() as f32 * scale).round() as u32).max(1);
+                let height = ((image.height() as f32 * scale).round() as u32).max(1);
+                image = image.resize(width, height, image::imageops::FilterType::Triangle);
+            }
+        }
         let rgba = image.to_rgba8();
         Ok(Self {
             width: rgba.width(),
@@ -201,7 +236,7 @@ pub struct Camera {
 impl Camera {
     pub fn view_projection(self, aspect: f32) -> Mat4 {
         Mat4::look_at_rh(self.position, self.target, self.up)
-            * Mat4::perspective_rh(self.vertical_fov_radians, aspect, self.near, self.far)
+            * Mat4::perspective_reverse_rh(self.vertical_fov_radians, aspect, self.near, self.far)
     }
 }
 
@@ -302,6 +337,7 @@ pub fn build_demo_scene() -> RenderScene {
             texture_sample_count: 2,
             flags: MaterialFlags {
                 emissive: true,
+                responsive_aa: true,
                 ..MaterialFlags::default()
             },
             emission: Color::rgb(4.0, 0.6, 0.25),
@@ -446,8 +482,76 @@ pub fn build_asset_showcase(path: impl AsRef<Path>) -> Result<RenderScene, GltfI
     Ok(scene)
 }
 
+const CS2_DUST2_PHYSICS_IMPORT_ENV: &str = "DHOOL_DUST2_PHYSICS_IMPORT";
+const CS2_DUST2_VISUAL_IMPORT_ENV: &str = "DHOOL_DUST2_VISUAL_IMPORT";
+const CS2_DUST2_FULL_IMPORT_ENV: &str = "DHOOL_DUST2_FULL_VISUAL";
+const CS2_DUST2_STRUCTURAL_TEXTURE_DIMENSION: u32 = 768;
+const CS2_DUST2_DETAIL_TEXTURE_DIMENSION: u32 = 384;
+const CS2_DUST2_STRUCTURAL_PBR_TEXTURE_DIMENSION: u32 = 256;
+const CS2_DUST2_PHYSICS_TEXTURE_DIMENSION: u32 = 512;
+const CS2_DUST2_LIVE_IMPORT_BUDGET: GltfImportBudget = GltfImportBudget {
+    max_meshes: 4_200,
+    max_vertices: 5_000_000,
+    max_triangles: 5_000_000,
+};
+const CS2_DUST2_SOURCE_SKYBOX_MATERIAL: &str = "materials/skybox/sky_de_dust2.vmat";
+const CS2_DUST2_SOURCE_POSTPROCESS: &str =
+    "lighting/postprocessing/de_dust2_prefab/de_dust2_prefab.vpost";
+const CS2_DUST2_SOURCE_MIN_EXPOSURE: f32 = 0.925;
+const CS2_DUST2_SOURCE_MAX_EXPOSURE: f32 = 1.1;
+const CS2_DUST2_SOURCE_SKY_INTENSITY: f32 = 0.960_784;
+const CS2_DUST2_SOURCE_SKY_BOUNCE_SCALE: f32 = 1.7;
+const CS2_DUST2_SOURCE_SUN_COLOR: Color = Color {
+    r: 1.0,
+    g: 222.0 / 255.0,
+    b: 189.0 / 255.0,
+    a: 1.0,
+};
+const CS2_DUST2_SOURCE_SKY_COLOR: Color = Color {
+    r: 211.0 / 255.0,
+    g: 226.0 / 255.0,
+    b: 248.0 / 255.0,
+    a: 1.0,
+};
+const CS2_DUST2_SOURCE_SKY_AMBIENT: Color = Color {
+    r: 151.0 / 255.0,
+    g: 151.0 / 255.0,
+    b: 151.0 / 255.0,
+    a: 1.0,
+};
+const CS2_DUST2_SOURCE_WARM_BARN_COLOR: Color = Color {
+    r: 1.0,
+    g: 190.0 / 255.0,
+    b: 135.0 / 255.0,
+    a: 1.0,
+};
+const CS2_DUST2_SOURCE_TUNNEL_WARM_COLOR: Color = Color {
+    r: 1.0,
+    g: 184.0 / 255.0,
+    b: 123.0 / 255.0,
+    a: 1.0,
+};
+const CS2_DUST2_SOURCE_COOL_BARN_COLOR: Color = Color {
+    r: 221.0 / 255.0,
+    g: 230.0 / 255.0,
+    b: 1.0,
+    a: 1.0,
+};
+
 pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImportError> {
     let root = root.as_ref();
+    let visual_path = root
+        .join("generated")
+        .join("cs2")
+        .join("maps")
+        .join("de_dust2.glb");
+    let force_physics = std::env::var_os(CS2_DUST2_PHYSICS_IMPORT_ENV).is_some();
+    if !force_physics
+        && (visual_path.is_file() || std::env::var_os(CS2_DUST2_VISUAL_IMPORT_ENV).is_some())
+    {
+        return build_cs2_dust2_visual_scene(root, &visual_path);
+    }
+
     let world_path = root
         .join("generated")
         .join("cs2")
@@ -456,13 +560,84 @@ pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImpo
         .join("world_physics_physics.glb");
     if !world_path.is_file() {
         return Err(GltfImportError::Gltf(format!(
+            "missing local CS2 Dust2 visual export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
+            visual_path.display()
+        )));
+    }
+
+    build_cs2_dust2_physics_scene(root, &world_path)
+}
+
+fn build_cs2_dust2_visual_scene(
+    _root: &Path,
+    visual_path: &Path,
+) -> Result<RenderScene, GltfImportError> {
+    let import_budget = if std::env::var_os(CS2_DUST2_FULL_IMPORT_ENV).is_some() {
+        None
+    } else {
+        Some(CS2_DUST2_LIVE_IMPORT_BUDGET)
+    };
+    let (mut materials, mut meshes) = import_gltf_with_texture_limits_filter_budget_by_primitive(
+        visual_path,
+        cs2_dust2_keep_visual_primitive,
+        import_budget,
+        cs2_dust2_texture_limits,
+    )?;
+
+    for material in &mut materials {
+        tune_cs2_dust2_material(material);
+    }
+    debug_assert!(cs2_dust2_source_lighting_data_available());
+
+    meshes.retain(|mesh| cs2_dust2_keep_visual_mesh(mesh, &materials));
+    for mesh in &mut meshes {
+        let source_name = mesh.name.clone();
+        mesh.name = format!("cs2_dust2_visual_{source_name}");
+        mesh.is_floor_or_ground = materials
+            .get(mesh.material_index)
+            .is_some_and(|material| cs2_dust2_ground_material(&material.name))
+            || cs2_dust2_ground_mesh(&source_name);
+        mesh.shadow_class = if cs2_dust2_visual_shadow_caster(&source_name, &materials, mesh) {
+            ShadowCasterClass::Main
+        } else {
+            ShadowCasterClass::None
+        };
+        mesh.prepass_eligible = cs2_dust2_prepass_eligible(&source_name, mesh);
+        mesh.reflection_proxy = false;
+    }
+    let lights = cs2_dust2_visual_lights(&meshes);
+
+    Ok(RenderScene {
+        camera: Camera {
+            position: Vec3::new(50.0, 2.2, -45.0),
+            target: Vec3::new(22.0, 4.8, -22.0),
+            up: Vec3::Y,
+            vertical_fov_radians: 72.0_f32.to_radians(),
+            near: 0.05,
+            far: 620.0,
+        },
+        materials,
+        meshes,
+        lights,
+        sky_color: CS2_DUST2_SOURCE_SKY_COLOR,
+        ambient_color: cs2_dust2_source_ambient_color(),
+    })
+}
+
+fn build_cs2_dust2_physics_scene(
+    root: &Path,
+    world_path: &Path,
+) -> Result<RenderScene, GltfImportError> {
+    if !world_path.is_file() {
+        return Err(GltfImportError::Gltf(format!(
             "missing local CS2 Dust2 export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
             world_path.display()
         )));
     }
 
-    let (_, mut meshes) = import_gltf(&world_path)?;
-    let materials = cs2_dust2_materials();
+    let (_, mut meshes) = import_gltf(world_path)?;
+    let mut materials = cs2_dust2_materials();
+    apply_cs2_dust2_physics_material_textures(root, &mut materials)?;
     for mesh in &mut meshes {
         let source_name = mesh.name.clone();
         mesh.name = format!("cs2_dust2_{source_name}");
@@ -475,49 +650,160 @@ pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImpo
 
     Ok(RenderScene {
         camera: Camera {
-            position: Vec3::new(50.0, 1.8, -45.0),
-            target: Vec3::new(30.0, 1.8, -30.0),
+            position: Vec3::new(50.0, 2.2, -45.0),
+            target: Vec3::new(22.0, 4.8, -22.0),
             up: Vec3::Y,
-            vertical_fov_radians: 62.0_f32.to_radians(),
+            vertical_fov_radians: 72.0_f32.to_radians(),
             near: 0.05,
             far: 620.0,
         },
         materials,
         meshes,
-        lights: vec![
-            Light {
-                name: "cs2_dust2_desert_sun",
-                kind: LightKind::Directional {
-                    direction: Vec3::new(-0.42, -0.86, -0.30).normalize_or_zero(),
-                },
-                color: Color::rgb(1.0, 0.93, 0.78),
-                intensity: 2.8,
-                casts_shadow: true,
-            },
-            Light {
-                name: "cs2_dust2_mid_bounce",
-                kind: LightKind::Local {
-                    position: Vec3::new(14.0, 8.0, -8.0),
-                    radius: 88.0,
-                },
-                color: Color::rgb(1.0, 0.62, 0.34),
-                intensity: 2.2,
-                casts_shadow: false,
-            },
-            Light {
-                name: "cs2_dust2_tunnel_fill",
-                kind: LightKind::Local {
-                    position: Vec3::new(-38.0, 6.0, -24.0),
-                    radius: 34.0,
-                },
-                color: Color::rgb(1.0, 0.54, 0.28),
-                intensity: 1.5,
-                casts_shadow: false,
-            },
-        ],
-        sky_color: Color::rgb(0.50, 0.64, 0.84),
-        ambient_color: Color::rgb(0.22, 0.18, 0.12),
+        lights: cs2_dust2_lights(),
+        sky_color: CS2_DUST2_SOURCE_SKY_COLOR,
+        ambient_color: cs2_dust2_source_ambient_color(),
     })
+}
+
+fn cs2_dust2_source_ambient_color() -> Color {
+    let exposure_midpoint =
+        (CS2_DUST2_SOURCE_MIN_EXPOSURE + CS2_DUST2_SOURCE_MAX_EXPOSURE).max(0.001) * 0.5;
+    let scale = CS2_DUST2_SOURCE_SKY_INTENSITY * CS2_DUST2_SOURCE_SKY_BOUNCE_SCALE * 0.075
+        / exposure_midpoint;
+    Color::rgb(
+        CS2_DUST2_SOURCE_SKY_AMBIENT.r * scale,
+        CS2_DUST2_SOURCE_SKY_AMBIENT.g * scale,
+        CS2_DUST2_SOURCE_SKY_AMBIENT.b * scale,
+    )
+}
+
+fn cs2_dust2_source_lighting_data_available() -> bool {
+    !CS2_DUST2_SOURCE_SKYBOX_MATERIAL.is_empty() && !CS2_DUST2_SOURCE_POSTPROCESS.is_empty()
+}
+
+fn cs2_dust2_lights() -> Vec<Light> {
+    vec![Light {
+        name: "cs2_dust2_desert_sun",
+        kind: LightKind::Directional {
+            direction: Vec3::new(-0.42, -0.84, -0.34).normalize_or_zero(),
+        },
+        color: CS2_DUST2_SOURCE_SUN_COLOR,
+        intensity: 4.15,
+        casts_shadow: true,
+    }]
+}
+
+fn cs2_dust2_visual_lights(meshes: &[Mesh]) -> Vec<Light> {
+    let mut lights = cs2_dust2_lights();
+    for fixture in [
+        Cs2FixtureLight {
+            mesh_name_needle: "dust_hanging_light_02_on",
+            light_name: "cs2_dust2_fixture_hanging_light",
+            color: CS2_DUST2_SOURCE_WARM_BARN_COLOR,
+            intensity: 2.9,
+            radius: 34.0,
+            casts_shadow: true,
+        },
+        Cs2FixtureLight {
+            mesh_name_needle: "dust_ceiling_light_01",
+            light_name: "cs2_dust2_fixture_ceiling_light",
+            color: CS2_DUST2_SOURCE_TUNNEL_WARM_COLOR,
+            intensity: 2.2,
+            radius: 30.0,
+            casts_shadow: false,
+        },
+        Cs2FixtureLight {
+            mesh_name_needle: "dust_light_pole_02",
+            light_name: "cs2_dust2_fixture_light_pole_cool",
+            color: CS2_DUST2_SOURCE_COOL_BARN_COLOR,
+            intensity: 1.55,
+            radius: 55.0,
+            casts_shadow: false,
+        },
+        Cs2FixtureLight {
+            mesh_name_needle: "dust_light_pole_color",
+            light_name: "cs2_dust2_fixture_light_pole_warm",
+            color: CS2_DUST2_SOURCE_WARM_BARN_COLOR,
+            intensity: 1.35,
+            radius: 52.0,
+            casts_shadow: false,
+        },
+        Cs2FixtureLight {
+            mesh_name_needle: "dust_hanging_light_02_off",
+            light_name: "cs2_dust2_fixture_bounce_from_off_lamp",
+            color: CS2_DUST2_SOURCE_TUNNEL_WARM_COLOR,
+            intensity: 0.85,
+            radius: 24.0,
+            casts_shadow: false,
+        },
+    ] {
+        add_cs2_fixture_light(&mut lights, meshes, fixture);
+    }
+    lights
+}
+
+#[derive(Clone, Copy)]
+struct Cs2FixtureLight {
+    mesh_name_needle: &'static str,
+    light_name: &'static str,
+    color: Color,
+    intensity: f32,
+    radius: f32,
+    casts_shadow: bool,
+}
+
+fn add_cs2_fixture_light(lights: &mut Vec<Light>, meshes: &[Mesh], fixture: Cs2FixtureLight) {
+    let Some(position) = meshes
+        .iter()
+        .find(|mesh| {
+            mesh.name
+                .to_ascii_lowercase()
+                .contains(fixture.mesh_name_needle)
+        })
+        .and_then(mesh_world_center)
+    else {
+        return;
+    };
+
+    lights.push(Light {
+        name: fixture.light_name,
+        kind: LightKind::Local {
+            position: position + Vec3::new(0.0, 0.35, 0.0),
+            radius: fixture.radius,
+        },
+        color: fixture.color,
+        intensity: fixture.intensity,
+        casts_shadow: fixture.casts_shadow,
+    });
+}
+
+fn mesh_world_center(mesh: &Mesh) -> Option<Vec3> {
+    let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for vertex in &mesh.vertices {
+        let position = mesh.transform.mul_vec4(Vec4::new(
+            vertex.position.x,
+            vertex.position.y,
+            vertex.position.z,
+            1.0,
+        ));
+        let position = Vec3::new(position.x, position.y, position.z);
+        min = Vec3::new(
+            min.x.min(position.x),
+            min.y.min(position.y),
+            min.z.min(position.z),
+        );
+        max = Vec3::new(
+            max.x.max(position.x),
+            max.y.max(position.y),
+            max.z.max(position.z),
+        );
+    }
+    if min.x.is_finite() {
+        Some((min + max) * 0.5)
+    } else {
+        None
+    }
 }
 
 fn cs2_dust2_materials() -> Vec<Material> {
@@ -633,6 +919,123 @@ fn cs2_dust2_materials() -> Vec<Material> {
     ]
 }
 
+fn apply_cs2_dust2_physics_material_textures(
+    root: &Path,
+    materials: &mut [Material],
+) -> Result<(), GltfImportError> {
+    if materials.len() < 9 {
+        return Ok(());
+    }
+
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[0],
+        "hr_dust_plaster_17_color_psd_e3c2fa8e.png",
+        Some("hr_dust_plaster_17_normal_psd_58bdce.png"),
+        Some("hr_dust_plaster_17_normal_psd_58bdce_orm_2862003201.png"),
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[1],
+        "hr_dust_ground_dirt_rough_01_color_psd_a9b467d7.png",
+        Some("hr_dust_ground_dirt_rough_01_normal_tga_79d11f.png"),
+        Some("hr_dust_ground_dirt_rough_01_normal_tga_79d11f_orm_405171505.png"),
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[2],
+        "dust_kasbah_wood_planks_color_psd_9108b195.png",
+        Some("dust_kasbah_wood_planks_normal_tga_1c51acbb.png"),
+        None,
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[3],
+        "hr_dust_metal_trim_01_color_psd_1fc73036.png",
+        Some("hr_dust_metal_trim_01_normal_psd_f059dcb2.png"),
+        Some("hr_dust_metal_trim_01_normal_psd_f059dcb2_orm_3521441051.png"),
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[4],
+        "dust_chainlink_fence_001_color_psd_f6c093f1.png",
+        None,
+        None,
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[5],
+        "dust_vehicle_glass_opaque_color_psd_615258b1.png",
+        None,
+        Some("dust_vehicle_glass_opaque_mask_rough_psd_695492aa.png"),
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[6],
+        "dust_kasbah_rock_wall_color_psd_b409098f.png",
+        Some("dust_kasbah_rock_wall_normal_tga_116a96a1.png"),
+        None,
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[7],
+        "hr_dust_tire001_color_psd_1ef33bb8.png",
+        Some("hr_dust_tire001_normal_psd_f8c4c139.png"),
+        None,
+    )?;
+    apply_cs2_dust2_texture_set(
+        root,
+        &mut materials[8],
+        "hr_dust_mudbrick_plaster_rough_01_color_psd_62e66d87.png",
+        Some("hr_dust_mudbrick_plaster_rough_01_normal_tga_81b10bbf.png"),
+        Some("hr_dust_mudbrick_plaster_rough_01_normal_tga_81b10bbf_orm_3109146199.png"),
+    )?;
+
+    Ok(())
+}
+
+fn apply_cs2_dust2_texture_set(
+    root: &Path,
+    material: &mut Material,
+    base_color: &str,
+    normal: Option<&str>,
+    pbr: Option<&str>,
+) -> Result<(), GltfImportError> {
+    let Some(base_color_texture) = load_cs2_dust2_map_texture(root, base_color)? else {
+        return Ok(());
+    };
+    material.base_color_texture = Some(base_color_texture);
+    material.normal_texture = normal
+        .map(|filename| load_cs2_dust2_map_texture(root, filename))
+        .transpose()?
+        .flatten();
+    material.pbr_texture = pbr
+        .map(|filename| load_cs2_dust2_map_texture(root, filename))
+        .transpose()?
+        .flatten();
+    material.texture_sample_count = usize::from(material.base_color_texture.is_some())
+        + usize::from(material.normal_texture.is_some())
+        + usize::from(material.pbr_texture.is_some());
+    Ok(())
+}
+
+fn load_cs2_dust2_map_texture(
+    root: &Path,
+    filename: &str,
+) -> Result<Option<TextureImage>, GltfImportError> {
+    let path = root
+        .join("generated")
+        .join("cs2")
+        .join("maps")
+        .join(filename);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    TextureImage::from_path_with_max_dimension(&path, CS2_DUST2_PHYSICS_TEXTURE_DIMENSION)
+        .map(Some)
+        .map_err(|message| GltfImportError::Gltf(format!("{}: {message}", path.display())))
+}
+
 fn cs2_dust2_material_index(name: &str) -> usize {
     if name.contains("chainlink") {
         4
@@ -665,6 +1068,232 @@ fn cs2_dust2_ground_mesh(name: &str) -> bool {
         || name.contains("concrete")
         || name.contains("carpet")
         || name.contains("rock")
+}
+
+fn tune_cs2_dust2_material(material: &mut Material) {
+    let name = material.name.to_ascii_lowercase();
+    material.flags.receives_contact_shadows = true;
+    material.flags.uses_bent_normals = material.specular_intensity > 0.15;
+    material.cavity = material.cavity.max(0.82);
+
+    if name.contains("glass") || name.contains("window") {
+        material.class = MaterialClass::Glass;
+        material.flags.glass = true;
+        material.roughness = material.roughness.min(0.18);
+        material.specular_intensity = material.specular_intensity.max(0.72);
+    } else if cs2_dust2_metal_material(&name) {
+        material.class = MaterialClass::Metal;
+        material.metallic = material.metallic.max(0.65);
+        material.roughness = material.roughness.clamp(0.32, 0.72);
+        material.specular_intensity = material.specular_intensity.max(0.58);
+    } else if cs2_dust2_ground_material(&name) || cs2_dust2_plaster_material(&name) {
+        material.class = MaterialClass::Concrete;
+        material.roughness = material.roughness.max(0.72);
+        material.specular_intensity = material.specular_intensity.max(0.18);
+    } else if name.contains("foliage")
+        || name.contains("palm")
+        || name.contains("grass")
+        || name.contains("weeds")
+        || name.contains("leaf")
+        || name.contains("frond")
+    {
+        material.class = MaterialClass::Foliage;
+        material.roughness = material.roughness.max(0.68);
+        material.specular_intensity = 0.12;
+    }
+}
+
+fn cs2_dust2_keep_visual_mesh(mesh: &Mesh, materials: &[Material]) -> bool {
+    let material_name = materials
+        .get(mesh.material_index)
+        .map(|material| material.name.as_str());
+    cs2_dust2_keep_visual_names(&mesh.name, material_name)
+}
+
+fn cs2_dust2_texture_limits(material_name: Option<&str>) -> GltfTextureLimits {
+    let Some(material_name) = material_name else {
+        return GltfTextureLimits::base_color(CS2_DUST2_DETAIL_TEXTURE_DIMENSION);
+    };
+    let material_name = material_name.to_ascii_lowercase();
+    let expensive_detail = cs2_dust2_skip_expensive_detail("", &material_name)
+        || material_name.contains("decal")
+        || material_name.contains("overlay")
+        || material_name.contains("spray")
+        || material_name.contains("stain");
+    let structural = cs2_dust2_structural_visual_name("", Some(&material_name));
+    let hard_surface = structural
+        || material_name.contains("wood")
+        || material_name.contains("crate")
+        || material_name.contains("metal")
+        || material_name.contains("barrel")
+        || material_name.contains("door");
+
+    GltfTextureLimits {
+        base_color: Some(if structural {
+            CS2_DUST2_STRUCTURAL_TEXTURE_DIMENSION
+        } else {
+            CS2_DUST2_DETAIL_TEXTURE_DIMENSION
+        }),
+        normal: if hard_surface && !expensive_detail {
+            Some(CS2_DUST2_STRUCTURAL_PBR_TEXTURE_DIMENSION)
+        } else {
+            None
+        },
+        pbr: if hard_surface && !expensive_detail {
+            Some(CS2_DUST2_STRUCTURAL_PBR_TEXTURE_DIMENSION)
+        } else {
+            None
+        },
+    }
+}
+
+fn cs2_dust2_keep_visual_primitive(info: GltfPrimitiveInfo<'_>) -> bool {
+    cs2_dust2_keep_visual_names(info.mesh_name, info.material_name)
+}
+
+fn cs2_dust2_keep_visual_names(mesh_name: &str, material_name: Option<&str>) -> bool {
+    let mesh_name = mesh_name.to_ascii_lowercase();
+    if mesh_name.contains("blocklight")
+        || mesh_name.contains("playerclip")
+        || mesh_name.contains("npcclip")
+        || mesh_name.contains("grenadeclip")
+        || mesh_name.contains("trigger")
+        || mesh_name.contains("postprocess")
+        || mesh_name.contains("nav_")
+        || mesh_name.contains("physics")
+    {
+        return false;
+    }
+
+    let Some(material_name) = material_name else {
+        return false;
+    };
+    let material_name = material_name.to_ascii_lowercase();
+    !(material_name.starts_with("tools")
+        || material_name.contains("toolstrigger")
+        || material_name.contains("toolsskybox")
+        || material_name.contains("toolsclip")
+        || material_name.contains("blocklight")
+        || material_name.contains("postprocessingvolume"))
+}
+
+fn cs2_dust2_structural_visual_name(mesh_name: &str, material_name: Option<&str>) -> bool {
+    let material_name = material_name.unwrap_or("");
+    let combined = format!("{mesh_name} {material_name}").to_ascii_lowercase();
+    combined.contains("roof")
+        || combined.contains("trim")
+        || combined.contains("merlon")
+        || combined.contains("arch")
+        || combined.contains("column")
+        || combined.contains("stairs")
+        || combined.contains("wall")
+        || combined.contains("plaster")
+        || combined.contains("mudbrick")
+        || combined.contains("kasbah")
+        || combined.contains("breeze")
+        || combined.contains("sidewalk")
+        || combined.contains("ground")
+        || combined.contains("asphalt")
+        || combined.contains("tile")
+        || combined.contains("stone")
+        || combined.contains("concrete")
+        || combined.contains("sand")
+        || combined.contains("hotel")
+}
+
+fn cs2_dust2_skip_expensive_detail(mesh_name: &str, material_name: &str) -> bool {
+    let combined = format!("{mesh_name} {material_name}");
+    combined.contains("dust_wires")
+        || combined.contains("wire_attachments")
+        || combined.contains("antenna")
+        || combined.contains("cable")
+        || combined.contains("shipping_crate_01_painted_decals")
+        || combined.contains("shipping_crate_02_painted_decals")
+        || combined.contains("shipping_crate_01_wood_decals")
+        || combined.contains("shipping_crate_02_wood_decals")
+        || combined.contains("wall_stain")
+        || combined.contains("paint_patch")
+        || combined.contains("bombsite_x_spray")
+        || combined.contains("foliage")
+        || combined.contains("palm_frond")
+        || combined.contains("agave")
+        || combined.contains("olive_")
+        || combined.contains("sumac")
+        || combined.contains("sagebrush")
+        || combined.contains("zebra_grass")
+        || combined.contains("weeds_")
+        || combined.contains("steam_001")
+        || combined.contains("lightshaft")
+        || combined.contains("dust_001")
+}
+
+fn cs2_dust2_visual_shadow_caster(source_name: &str, materials: &[Material], mesh: &Mesh) -> bool {
+    if mesh.is_floor_or_ground {
+        return false;
+    }
+    let material_name = materials
+        .get(mesh.material_index)
+        .map(|material| material.name.to_ascii_lowercase())
+        .unwrap_or_default();
+    let name = source_name.to_ascii_lowercase();
+    if material_name.contains("glass")
+        || material_name.contains("foliage")
+        || material_name.contains("wire")
+        || material_name.contains("chainlink")
+        || name.contains("overlay")
+        || name.contains("decal")
+    {
+        return false;
+    }
+    mesh.indices.len() >= 128
+}
+
+fn cs2_dust2_prepass_eligible(source_name: &str, mesh: &Mesh) -> bool {
+    let name = source_name.to_ascii_lowercase();
+    (name.contains("wall")
+        || name.contains("plaster")
+        || name.contains("mudbrick")
+        || name.contains("kasbah")
+        || name.contains("concrete")
+        || name.contains("ground")
+        || name.contains("stone")
+        || name.contains("roof"))
+        && mesh.indices.len() >= 256
+}
+
+fn cs2_dust2_metal_material(name: &str) -> bool {
+    name.contains("metal")
+        || name.contains("steel")
+        || name.contains("iron")
+        || name.contains("barrel")
+        || name.contains("vehicle")
+        || name.contains("car_")
+        || name.contains("dumpster")
+        || name.contains("lamp")
+        || name.contains("lantern")
+        || name.contains("chainlink")
+        || name.contains("fence")
+        || name.contains("wire")
+}
+
+fn cs2_dust2_ground_material(name: &str) -> bool {
+    name.contains("sand")
+        || name.contains("ground")
+        || name.contains("asphalt")
+        || name.contains("road")
+        || name.contains("floor")
+        || name.contains("stone")
+        || name.contains("tile")
+        || name.contains("stairs")
+}
+
+fn cs2_dust2_plaster_material(name: &str) -> bool {
+    name.contains("plaster")
+        || name.contains("mudbrick")
+        || name.contains("brick")
+        || name.contains("concrete")
+        || name.contains("wall")
+        || name.contains("kasbah")
 }
 
 pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImportError> {
@@ -2029,6 +2658,7 @@ fn emissive_material(name: &str, base_color: Color, emission: Color, material_id
         texture_sample_count: 1,
         flags: MaterialFlags {
             emissive: true,
+            responsive_aa: true,
             ..MaterialFlags::default()
         },
         emission,
@@ -2094,6 +2724,7 @@ fn textured_generated_material(
         texture_sample_count: 1,
         flags: MaterialFlags {
             emissive,
+            responsive_aa: emissive,
             receives_contact_shadows: !emissive,
             uses_bent_normals: params.specular_intensity > 0.15,
             ..MaterialFlags::default()

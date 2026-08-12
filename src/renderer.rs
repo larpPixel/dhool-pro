@@ -210,6 +210,7 @@ struct GPixel {
     texture_count: usize,
     glass: bool,
     emissive: bool,
+    responsive_aa: bool,
     shadow_class: ShadowCasterClass,
 }
 
@@ -230,6 +231,7 @@ impl Default for GPixel {
             texture_count: 0,
             glass: false,
             emissive: false,
+            responsive_aa: false,
             shadow_class: ShadowCasterClass::None,
         }
     }
@@ -250,7 +252,7 @@ struct FrameBuffers {
 impl FrameBuffers {
     fn new(pixels: usize) -> Self {
         Self {
-            depth: vec![1.0; pixels],
+            depth: vec![0.0; pixels],
             gbuffer: vec![GPixel::default(); pixels],
             overdraw: vec![0; pixels],
             shadow_mask: vec![1.0; pixels],
@@ -301,14 +303,12 @@ impl CpuRenderer {
         let graph = build_baseline_frame_graph();
         warnings.extend(graph.validate().into_iter().map(RenderWarning::Graph));
 
-        Self::run_pass(&mut reports, "frame-start-clears", 0.1, || {
-            buffers.depth.fill(1.0);
-            buffers.gbuffer.fill(GPixel::default());
-            buffers.shadow_mask.fill(1.0);
-            buffers.ao.fill(1.0);
-            buffers.reflections.fill(Color::BLACK);
-            buffers.lighting.fill([0.0; 4]);
-            buffers.overdraw.fill(0);
+        Self::run_pass(&mut reports, "frame-start-depth-motion-clear", 0.1, || {
+            buffers.depth.fill(0.0);
+            for pixel in &mut buffers.gbuffer {
+                pixel.covered = false;
+                pixel.velocity = Vec2::ZERO;
+            }
             Ok(())
         })?;
 
@@ -377,19 +377,6 @@ impl CpuRenderer {
             Ok(())
         })?;
 
-        Self::run_pass(&mut reports, "kawase-bloom-and-gt-tonemap", 1.0, || {
-            if self.config.enable_bloom {
-                self.apply_bloom(&mut buffers)?;
-            }
-            if self.config.enable_persistence {
-                self.apply_persistence(&mut buffers.lighting);
-            }
-            Ok(())
-        })?;
-
-        let mut color = gt_tonemap_rgba8(&buffers.lighting, self.config.exposure)
-            .map_err(|_| RenderError::KernelFailure)?;
-
         Self::run_pass(&mut reports, "smaa-compute-edge-detect", 0.5, || {
             buffers.edges =
                 edge_stencil_4x4(&buffers.depth, self.config.width, self.config.height, 0.003)
@@ -400,13 +387,30 @@ impl CpuRenderer {
             Ok(())
         })?;
 
+        // T2x history must contain this frame's unblended spatial result. Saving
+        // a temporally blended frame here would create an accumulation buffer.
+        let current_history = buffers.lighting.clone();
+
+        Self::run_pass(&mut reports, "kawase-bloom-and-gt-tonemap", 1.0, || {
+            if self.config.enable_bloom {
+                self.apply_bloom(&mut buffers)?;
+            }
+            if self.config.enable_persistence {
+                self.apply_persistence(&mut buffers.lighting, &buffers.edges, &buffers.gbuffer);
+            }
+            Ok(())
+        })?;
+
+        let mut color = gt_tonemap_rgba8(&buffers.lighting, self.config.exposure)
+            .map_err(|_| RenderError::KernelFailure)?;
+
         Self::run_pass(&mut reports, "smaa-persistence-resolve", 0.5, || {
             self.apply_smaa(&buffers, &mut color);
             Ok(())
         })?;
 
         color = self.debug_or_beauty(scene, &buffers, color)?;
-        self.history = buffers.lighting.clone();
+        self.history = current_history;
 
         Ok(RenderOutput {
             width: self.config.width,
@@ -521,7 +525,7 @@ impl CpuRenderer {
         let mut out = [ScreenVertex {
             x: 0.0,
             y: 0.0,
-            depth: 1.0,
+            depth: 0.0,
             world: Vec3::ZERO,
             normal: Vec3::Y,
             tangent: Vec3::X,
@@ -621,7 +625,7 @@ impl CpuRenderer {
                 }
                 let idx = self.index(x, y);
                 let depth = w0 * tri[0].depth + w1 * tri[1].depth + w2 * tri[2].depth;
-                if depth > buffers.depth[idx] + 0.0001 {
+                if depth + 0.0001 < buffers.depth[idx] {
                     continue;
                 }
                 if !depth_only {
@@ -712,6 +716,7 @@ impl CpuRenderer {
                     texture_count: material.texture_sample_count,
                     glass: material.flags.glass,
                     emissive: material.flags.emissive,
+                    responsive_aa: material.flags.responsive_aa,
                     shadow_class,
                 };
             }
@@ -977,13 +982,14 @@ impl CpuRenderer {
             for x in 0..self.config.width {
                 let idx = self.index(x, y);
                 let depth = buffers.depth[idx];
-                if depth >= 1.0 {
+                if depth <= 0.0 {
                     continue;
                 }
                 let noise = (blue_noise_hash(x, y, self.config.frame_index, 0xF06B_100D) & 255)
                     as f32
                     / 255.0;
-                let fog = saturate(depth * depth * 0.45 + noise * 0.015);
+                let distance_depth = 1.0 - depth;
+                let fog = saturate(distance_depth * distance_depth * 0.45 + noise * 0.015);
                 let fog_rgb = scene.sky_color.to_vec3() * 0.75;
                 buffers.lighting[idx][0] = buffers.lighting[idx][0] * (1.0 - fog) + fog_rgb.x * fog;
                 buffers.lighting[idx][1] = buffers.lighting[idx][1] * (1.0 - fog) + fog_rgb.y * fog;
@@ -1046,16 +1052,37 @@ impl CpuRenderer {
         }
     }
 
-    fn apply_persistence(&self, lighting: &mut [[f32; 4]]) {
+    fn apply_persistence(&self, lighting: &mut [[f32; 4]], edges: &[u8], gbuffer: &[GPixel]) {
         if self.history.len() != lighting.len() {
             return;
         }
-        for (dst, prev) in lighting.iter_mut().zip(&self.history) {
-            let delta = (dst[3] - prev[3]).abs();
-            if delta < 0.2 {
-                dst[0] = dst[0] * 0.75 + prev[0] * 0.25;
-                dst[1] = dst[1] * 0.75 + prev[1] * 0.25;
-                dst[2] = dst[2] * 0.75 + prev[2] * 0.25;
+        let tiles_w = self.config.width.div_ceil(4);
+        for (tile_index, &edge) in edges.iter().enumerate() {
+            if edge == 0 {
+                continue;
+            }
+            let tile_x = tile_index as u32 % tiles_w;
+            let tile_y = tile_index as u32 / tiles_w;
+            for offset_y in 0..4 {
+                for offset_x in 0..4 {
+                    let x = tile_x * 4 + offset_x;
+                    let y = tile_y * 4 + offset_y;
+                    if x >= self.config.width || y >= self.config.height {
+                        continue;
+                    }
+                    let index = self.index(x, y);
+                    if gbuffer[index].responsive_aa {
+                        continue;
+                    }
+                    let dst = &mut lighting[index];
+                    let prev = self.history[index];
+                    let delta = (dst[3] - prev[3]).abs();
+                    if delta < 0.2 {
+                        dst[0] = dst[0] * 0.84 + prev[0] * 0.16;
+                        dst[1] = dst[1] * 0.84 + prev[1] * 0.16;
+                        dst[2] = dst[2] * 0.84 + prev[2] * 0.16;
+                    }
+                }
             }
         }
     }
@@ -1076,11 +1103,9 @@ impl CpuRenderer {
                 let g = buffers.gbuffer[idx];
                 let color = match self.config.debug_view {
                     DebugView::Beauty => unreachable!(),
-                    DebugView::Depth => Color::rgb(
-                        1.0 - buffers.depth[idx],
-                        1.0 - buffers.depth[idx],
-                        1.0 - buffers.depth[idx],
-                    ),
+                    DebugView::Depth => {
+                        Color::rgb(buffers.depth[idx], buffers.depth[idx], buffers.depth[idx])
+                    }
                     DebugView::Normals => Color::rgb(
                         g.normal.x * 0.5 + 0.5,
                         g.normal.y * 0.5 + 0.5,

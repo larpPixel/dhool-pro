@@ -263,6 +263,19 @@ impl Mat4 {
         }
     }
 
+    pub fn perspective_reverse_rh(fovy_radians: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let f = 1.0 / (fovy_radians * 0.5).tan();
+        let inverse_depth_range = 1.0 / (far - near);
+        Self {
+            m: [
+                [f / aspect, 0.0, 0.0, 0.0],
+                [0.0, f, 0.0, 0.0],
+                [0.0, 0.0, near * inverse_depth_range, -1.0],
+                [0.0, 0.0, far * near * inverse_depth_range, 0.0],
+            ],
+        }
+    }
+
     pub fn orthographic_rh(
         left: f32,
         right: f32,
