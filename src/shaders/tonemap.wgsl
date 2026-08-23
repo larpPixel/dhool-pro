@@ -3,6 +3,8 @@
 @group(0) @binding(2) var volumetric_fog: texture_2d<f32>;
 @group(0) @binding(3) var exposure_white_balance: texture_2d<f32>;
 
+const BLOOM_INTENSITY: f32 = 0.10;
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -88,7 +90,7 @@ fn sample_fog(uv: vec2<f32>) -> vec4<f32> {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(input.position.xy);
     let fog = sample_fog(input.uv);
-    let lit = load_hdr(pixel) + sample_bloom(input.uv) * 0.30;
+    let lit = load_hdr(pixel) + sample_bloom(input.uv) * BLOOM_INTENSITY;
     let hdr = mix(lit, fog.rgb, clamp(fog.a, 0.0, 0.16));
     let calibration = textureLoad(exposure_white_balance, vec2<i32>(0), 0);
     let calibrated_hdr = hdr * calibration.rgb * calibration.a;

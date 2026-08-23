@@ -547,7 +547,7 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
     );
     let bloom = graph.add_resource(
         ResourceDesc::new(
-            "kawase-bloom-rg11b10",
+            "diffuse-gaussian-bloom-rg11b10",
             Format::Rg11B10,
             ResourceKind::PostProcess,
         )
@@ -848,7 +848,7 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
 
     graph.add_pass(
         RenderPassDesc::new(
-            "kawase-bloom-chain",
+            "diffuse-gaussian-bloom-chain",
             "post",
             FeatureCategory::PostProcess,
             0.6,

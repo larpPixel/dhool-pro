@@ -30,6 +30,7 @@ fn baseline_frame_graph_obeys_spec_constraints() {
         "local-light-z-fail-stencil-volumes",
         "stencil-restricted-local-lighting",
         "single-direction-depth-aware-velocity-compensation",
+        "diffuse-gaussian-bloom-chain",
         "smaa-t2x-motion-vector-resolve",
         "separate-linear-ui-overlay",
         "gamma-correct-scene-ui-presentation",

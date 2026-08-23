@@ -30,8 +30,10 @@ a fullscreen R32 depth copy, half-resolution Hi-Z/fog/SSR compute passes,
 temporal reflections over simplified proxy geometry, light-volume guarded HDR
 deferred lighting with screen-space occlusion, world-space 3D rain with a
 generated streak-detail atlas, textured puddle normals and reflection breakup,
-Kawase bloom, GT tone mapping, and a final SMAA T2x-style edge/persistence
-resolve. Materials use mipmapped base-color, tangent-space normal, and packed
+energy-capped Gaussian bloom, GT tone mapping, and a final SMAA T2x-style
+edge/persistence resolve. Bloom stays close to clipped highlights while the
+world-space lights, shadows, and reflections carry the scene illumination.
+Materials use mipmapped base-color, tangent-space normal, and packed
 AO/roughness/metallic maps.
 
 Lighting and weather come from each scene's environment profile. The monsoon

@@ -188,7 +188,7 @@ impl ApplicationHandler for LiveApplication {
             renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type
         );
         println!(
-            "live pipeline: alpha-aware cached shadows -> 2x MSAA selective prepass/PBR+motion G-buffer + coverage resolve -> R32 depth/Hi-Z/fog -> SSR-first temporal reflections -> D32S8 light volumes + material-profile HDR lighting/rain -> velocity compensation + Kawase bloom/GT resolve -> coverage-assisted SMAA T2x -> separate UI/gamma presentation"
+            "live pipeline: alpha-aware cached shadows -> 2x MSAA selective prepass/PBR+motion G-buffer + coverage resolve -> R32 depth/Hi-Z/fog -> SSR-first temporal reflections -> D32S8 light volumes + material-profile HDR lighting/rain -> velocity compensation + Gaussian bloom/GT resolve -> coverage-assisted SMAA T2x -> separate UI/gamma presentation"
         );
         window.set_title(&format!(
             "Dhool Pro | {} | vendor-agnostic compute",
@@ -2296,7 +2296,7 @@ impl GpuRenderer {
                 },
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("kawase-bloom-extract"),
+                label: Some("diffuse-bloom-extract"),
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -2308,9 +2308,22 @@ impl GpuRenderer {
             pass.draw(0..3, 0..1);
         }
 
-        {
+        for (label, target, pipeline, bind_group) in [
+            (
+                "diffuse-gaussian-bloom-horizontal",
+                &self.gbuffer.bloom_b,
+                &self.bloom_blur_horizontal_pipeline,
+                &self.gbuffer.bloom_blur_a_bind_group,
+            ),
+            (
+                "diffuse-gaussian-bloom-vertical",
+                &self.gbuffer.bloom_a,
+                &self.bloom_blur_vertical_pipeline,
+                &self.gbuffer.bloom_blur_b_bind_group,
+            ),
+        ] {
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: &self.gbuffer.bloom_b,
+                view: target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -2319,38 +2332,15 @@ impl GpuRenderer {
                 },
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("kawase-bloom-horizontal"),
+                label: Some(label),
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.bloom_blur_horizontal_pipeline);
-            pass.set_bind_group(0, &self.gbuffer.bloom_blur_a_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        {
-            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: &self.gbuffer.bloom_a,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })];
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("kawase-bloom-vertical"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.bloom_blur_vertical_pipeline);
-            pass.set_bind_group(0, &self.gbuffer.bloom_blur_b_bind_group, &[]);
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -3144,10 +3134,22 @@ impl GBuffer {
                 },
             ],
         });
+        let bloom_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("diffuse-gaussian-bloom-linear-clamp"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
         let bloom_extract_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bloom-extract-bind-group"),
             layout: bloom_layout,
-            entries: &[texture_entry(0, &velocity_compensation_b)],
+            entries: &[
+                texture_entry(0, &velocity_compensation_b),
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&bloom_sampler),
+                },
+            ],
         });
         let velocity_compensation_bind_group =
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3231,12 +3233,24 @@ impl GBuffer {
         let bloom_blur_a_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bloom-blur-a-bind-group"),
             layout: bloom_layout,
-            entries: &[texture_entry(0, &bloom_a)],
+            entries: &[
+                texture_entry(0, &bloom_a),
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&bloom_sampler),
+                },
+            ],
         });
         let bloom_blur_b_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bloom-blur-b-bind-group"),
             layout: bloom_layout,
-            entries: &[texture_entry(0, &bloom_b)],
+            entries: &[
+                texture_entry(0, &bloom_b),
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&bloom_sampler),
+                },
+            ],
         });
         let tonemap_bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tonemap-bind-group-exposure-a"),
@@ -4773,7 +4787,7 @@ fn create_bloom_pipeline(
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("kawase-bloom-pipeline"),
+        label: Some("diffuse-gaussian-bloom-pipeline"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -5147,10 +5161,15 @@ fn gbuffer_resolve_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 fn bloom_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("bloom-layout"),
-        entries: &[unfiltered_texture_layout_entry(
-            0,
-            wgpu::ShaderStages::FRAGMENT,
-        )],
+        entries: &[
+            sampled_texture_layout_entry(0, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
     })
 }
 
