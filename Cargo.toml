@@ -3,6 +3,22 @@ name = "dhool-pro"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
+description = "A reusable Rust game runtime with deterministic simulation and vendor-agnostic rendering"
+repository = "https://git.jr4.in/jR4dh3y/dhool-pro"
+keywords = ["game-engine", "rendering", "wgpu"]
+categories = ["game-engines", "graphics", "rendering"]
+exclude = [
+    "/assets/**",
+    "/demo-output/**",
+    "/files/**",
+    "/scripts/**",
+    "*.md",
+    "!/README.md",
+]
+
+[features]
+default = []
+demo-content = []
 
 [lib]
 name = "dhool_pro"
@@ -11,6 +27,17 @@ path = "src/lib.rs"
 [[bin]]
 name = "dhool-pro"
 path = "src/main.rs"
+required-features = ["demo-content"]
+
+[[test]]
+name = "renderer"
+path = "tests/renderer.rs"
+required-features = ["demo-content"]
+
+[[test]]
+name = "game_engine"
+path = "tests/game_engine.rs"
+required-features = ["demo-content"]
 
 [build-dependencies]
 cc = "1.2"

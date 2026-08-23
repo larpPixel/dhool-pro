@@ -1,7 +1,10 @@
 use crate::asset::{
     MaterialDesc, MeshDesc, ShadowCasterClass, TextureDesc, TextureFormat, TextureRole,
 };
-use crate::cloth::{ClothDefinition, ClothPin, ClothSettings};
+use crate::cloth::ClothDefinition;
+#[cfg(feature = "demo-content")]
+use crate::cloth::{ClothPin, ClothSettings};
+#[cfg(feature = "demo-content")]
 use crate::gltf_import::{
     import_gltf, import_gltf_with_texture_limits_filter_budget_by_primitive, GltfImportBudget,
     GltfImportError, GltfPrimitiveInfo, GltfTextureLimits,
@@ -9,7 +12,9 @@ use crate::gltf_import::{
 use crate::math::{Color, Mat4, Vec2, Vec3, Vec4};
 use std::f32::consts::{PI, TAU};
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[cfg(feature = "demo-content")]
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaterialClass {
@@ -207,6 +212,7 @@ impl EnvironmentMap {
         )
     }
 
+    #[cfg(feature = "demo-content")]
     fn from_hdr_bytes(bytes: &[u8], exposure_ev: f32, yaw_radians: f32) -> Result<Self, String> {
         Ok(Self::new(
             TextureImage::from_encoded_bytes_with_max_dimension(bytes, 0)?,
@@ -538,9 +544,9 @@ pub enum LightKind {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Light {
-    pub name: &'static str,
+    pub name: String,
     pub kind: LightKind,
     pub color: Color,
     pub intensity: f32,
@@ -637,6 +643,11 @@ impl RenderScene {
         self.environment_map.diffuse_irradiance(normal) + self.ambient_color.to_vec3()
     }
 }
+
+#[cfg(feature = "demo-content")]
+#[rustfmt::skip]
+mod bundled {
+use super::*;
 
 const MONSOON_ENVIRONMENT_BYTES: &[u8] =
     include_bytes!("../assets/aaa/environment/kloppenheim_07_puresky_2k.hdr");
@@ -840,7 +851,7 @@ pub fn build_demo_scene() -> RenderScene {
         ],
         lights: vec![
             Light {
-                name: "sun_key",
+                name: "sun_key".to_string(),
                 kind: LightKind::Directional {
                     direction: Vec3::new(-0.35, -0.75, -0.45).normalize_or_zero(),
                 },
@@ -849,7 +860,7 @@ pub fn build_demo_scene() -> RenderScene {
                 casts_shadow: true,
             },
             Light {
-                name: "warm_local",
+                name: "warm_local".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(0.9, 1.2, 1.1),
                     radius: 4.0,
@@ -988,9 +999,9 @@ pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImpo
             .join("world_physics_physics.glb");
         if !world_path.is_file() {
             return Err(GltfImportError::Gltf(format!(
-                "missing local CS2 Dust2 visual export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
-                visual_path.display()
-            )));
+            "missing local CS2 Dust2 visual export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
+            visual_path.display()
+        )));
         }
         build_cs2_dust2_physics_scene(root, &world_path, environment_map)?
     };
@@ -1035,12 +1046,13 @@ fn build_cs2_dust2_visual_scene(
     } else {
         Some(CS2_DUST2_LIVE_IMPORT_BUDGET)
     };
-    let (mut materials, mut meshes) = import_gltf_with_texture_limits_filter_budget_by_primitive(
-        visual_path,
-        cs2_dust2_keep_visual_primitive,
-        import_budget,
-        cs2_dust2_texture_limits,
-    )?;
+    let (mut materials, mut meshes) =
+        import_gltf_with_texture_limits_filter_budget_by_primitive(
+            visual_path,
+            cs2_dust2_keep_visual_primitive,
+            import_budget,
+            cs2_dust2_texture_limits,
+        )?;
 
     for material in &mut materials {
         tune_cs2_dust2_material(material);
@@ -1088,9 +1100,9 @@ fn build_cs2_dust2_physics_scene(
 ) -> Result<RenderScene, GltfImportError> {
     if !world_path.is_file() {
         return Err(GltfImportError::Gltf(format!(
-            "missing local CS2 Dust2 export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
-            world_path.display()
-        )));
+        "missing local CS2 Dust2 export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
+        world_path.display()
+    )));
     }
 
     let (_, mut meshes) = import_gltf(world_path)?;
@@ -1149,7 +1161,7 @@ fn cs2_dust2_source_ambient_color() -> Color {
 
 fn cs2_dust2_lights() -> Vec<Light> {
     vec![Light {
-        name: "cs2_dust2_desert_sun",
+        name: "cs2_dust2_desert_sun".to_string(),
         kind: LightKind::Directional {
             direction: Vec3::new(-0.42, -0.84, -0.34).normalize_or_zero(),
         },
@@ -1232,7 +1244,7 @@ fn add_cs2_fixture_light(lights: &mut Vec<Light>, meshes: &[Mesh], fixture: Cs2F
     };
 
     lights.push(Light {
-        name: fixture.light_name,
+        name: fixture.light_name.to_string(),
         kind: LightKind::Local {
             position: position + Vec3::new(0.0, 0.35, 0.0),
             radius: fixture.radius,
@@ -1693,7 +1705,11 @@ fn cs2_dust2_skip_expensive_detail(mesh_name: &str, material_name: &str) -> bool
         || combined.contains("dust_001")
 }
 
-fn cs2_dust2_visual_shadow_caster(source_name: &str, materials: &[Material], mesh: &Mesh) -> bool {
+fn cs2_dust2_visual_shadow_caster(
+    source_name: &str,
+    materials: &[Material],
+    mesh: &Mesh,
+) -> bool {
     if mesh.is_floor_or_ground {
         return false;
     }
@@ -1856,8 +1872,9 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
     {
         let load_puddle_texture = |filename: &str| {
             let path = root.join("puddles").join(filename);
-            TextureImage::from_path(&path)
-                .map_err(|message| GltfImportError::Gltf(format!("{}: {message}", path.display())))
+            TextureImage::from_path(&path).map_err(|message| {
+                GltfImportError::Gltf(format!("{}: {message}", path.display()))
+            })
         };
         let puddle = &mut materials[puddle_material];
         puddle.normal_texture = Some(load_puddle_texture("generated_puddle_normal.png")?);
@@ -2011,7 +2028,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         meshes: Vec::new(),
         lights: vec![
             Light {
-                name: "moon_key",
+                name: "moon_key".to_string(),
                 kind: LightKind::Directional {
                     direction: Vec3::new(-0.28, -0.8, -0.38).normalize_or_zero(),
                 },
@@ -2020,7 +2037,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: true,
             },
             Light {
-                name: "cyan_practical",
+                name: "cyan_practical".to_string(),
                 kind: LightKind::Spot {
                     position: Vec3::new(-3.8, 2.8, -5.4),
                     direction: Vec3::new(0.92, -0.30, -0.25).normalize_or_zero(),
@@ -2033,7 +2050,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: true,
             },
             Light {
-                name: "amber_practical",
+                name: "amber_practical".to_string(),
                 kind: LightKind::Spot {
                     position: Vec3::new(3.6, 2.4, -8.0),
                     direction: Vec3::new(-0.94, -0.24, 0.15).normalize_or_zero(),
@@ -2046,7 +2063,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: true,
             },
             Light {
-                name: "right_marker_fill",
+                name: "right_marker_fill".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(4.08, 2.85, -3.25),
                     radius: 5.8,
@@ -2056,7 +2073,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "right_barrel_read_fill",
+                name: "right_barrel_read_fill".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(3.12, 0.92, -3.35),
                     radius: 3.65,
@@ -2066,7 +2083,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "left_barrel_read_fill",
+                name: "left_barrel_read_fill".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(-3.18, 1.02, -4.35),
                     radius: 3.45,
@@ -2076,7 +2093,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "right_far_marker_fill",
+                name: "right_far_marker_fill".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(4.05, 3.10, -12.9),
                     radius: 5.0,
@@ -2086,7 +2103,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "deep_cyan_panel_fill",
+                name: "deep_cyan_panel_fill".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(1.8, 3.15, -24.1),
                     radius: 6.2,
@@ -2096,7 +2113,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "deep_amber_service_fill",
+                name: "deep_amber_service_fill".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(-3.0, 2.25, -20.2),
                     radius: 5.3,
@@ -2106,7 +2123,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "left_tarp_graze_fill",
+                name: "left_tarp_graze_fill".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(-3.75, 2.85, -12.6),
                     radius: 4.8,
@@ -2116,7 +2133,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "city_cross_street_cyan",
+                name: "city_cross_street_cyan".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(-8.8, 3.4, -36.0),
                     radius: 12.5,
@@ -2126,7 +2143,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "market_lane_amber",
+                name: "market_lane_amber".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(7.6, 2.9, -44.5),
                     radius: 13.0,
@@ -2136,7 +2153,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
             Light {
-                name: "distant_apartment_window_glow",
+                name: "distant_apartment_window_glow".to_string(),
                 kind: LightKind::Local {
                     position: Vec3::new(0.0, 8.2, -72.0),
                     radius: 28.0,
@@ -2185,7 +2202,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             7.0,
             2,
             Vec2::new(18.0, 3.5),
-            Mat4::rotation_y(90.0_f32.to_radians()) * Mat4::translation(Vec3::new(-5.0, 3.5, -7.5)),
+            Mat4::rotation_y(90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(-5.0, 3.5, -7.5)),
         ),
         wall_mesh(
             "right_aged_brick",
@@ -2193,7 +2211,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             7.0,
             2,
             Vec2::new(18.0, 3.5),
-            Mat4::rotation_y(-90.0_f32.to_radians()) * Mat4::translation(Vec3::new(5.0, 3.5, -7.5)),
+            Mat4::rotation_y(-90.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(5.0, 3.5, -7.5)),
         ),
         wall_mesh(
             "alley_end_brick",
@@ -2332,7 +2351,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
             1.4,
             3,
             Vec2::new(1.0, 1.2),
-            Mat4::rotation_y(8.0_f32.to_radians()) * Mat4::translation(Vec3::new(0.85, 3.1, -10.8)),
+            Mat4::rotation_y(8.0_f32.to_radians())
+                * Mat4::translation(Vec3::new(0.85, 3.1, -10.8)),
         ),
         wall_mesh(
             "far_scaffold_shadow",
@@ -3121,7 +3141,12 @@ fn load_surface_material(
     })
 }
 
-fn emissive_material(name: &str, base_color: Color, emission: Color, material_id: u8) -> Material {
+fn emissive_material(
+    name: &str,
+    base_color: Color,
+    emission: Color,
+    material_id: u8,
+) -> Material {
     Material {
         name: name.to_string(),
         class: MaterialClass::Emissive,
@@ -3167,7 +3192,10 @@ struct GeneratedTextureSetMaterialParams {
     material_id: u8,
 }
 
-fn load_generated_texture(root: &Path, filename: &str) -> Result<TextureImage, GltfImportError> {
+fn load_generated_texture(
+    root: &Path,
+    filename: &str,
+) -> Result<TextureImage, GltfImportError> {
     let path = root.join("generated").join(filename);
     TextureImage::from_path(&path)
         .map_err(|message| GltfImportError::Gltf(format!("{}: {message}", path.display())))
@@ -4048,3 +4076,7 @@ fn hanging_cloth_grid(
         }),
     }
 }
+}
+
+#[cfg(feature = "demo-content")]
+pub use bundled::{build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene};

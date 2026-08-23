@@ -1,14 +1,87 @@
 # Dhool Pro
 
-Dhool Pro is a live vendor-agnostic GPU renderer plus a deterministic CPU reference
-implementation of the architecture in [`gospol.md`](gospol.md). The live path uses
-`wgpu` with standard raster and compute shaders, not hardware ray-tracing APIs or a
-vendor SDK.
+Dhool Pro is a reusable Rust game engine crate. A game owns its scene, systems, and
+typed resources. Dhool runs startup, fixed-update, and per-frame schedules, manages
+the world and asset checks, and renders through either the deterministic CPU path or
+the live vendor-agnostic `wgpu` path.
+
+The rainy city and Dust2 are optional repository demos. A downstream game does not
+compile or package those assets.
+
+## Use Dhool in another project
+
+Add the engine as a Git or path dependency. The default feature set contains the
+engine and renderers but no bundled demo content.
+
+```toml
+[dependencies]
+dhool-pro = { git = "https://git.jr4.in/jR4dh3y/dhool-pro" }
+```
+
+Build a scene, register systems, then advance the game from your platform loop:
+
+```rust
+use dhool_pro::math::{Color, Vec3};
+use dhool_pro::{FrameInput, GameEngine, Light, Material, Mesh, ProjectSettings, SceneBuilder};
+
+let mut scene = SceneBuilder::new();
+let material = scene.add_material(Material::standard("player", Color::rgb(0.8, 0.2, 0.1)));
+scene.add_mesh(Mesh::cuboid("player", Vec3::ONE), material);
+scene.add_light(Light::directional("sun", Vec3::new(0.2, -1.0, -0.3), Color::WHITE, 2.0));
+
+let mut game = GameEngine::builder(ProjectSettings::default())
+    .scene(scene.build()?)
+    .fixed_system("move-player", |context: &mut dhool_pro::SystemContext<'_>| {
+        let player = context.world.find_by_name("player").ok_or("missing player")?;
+        context.world.transform_mut(player).ok_or("missing transform")?.position.x +=
+            context.time.delta_seconds;
+        Ok(())
+    })
+    .build()?;
+let frame = game.frame(FrameInput::default())?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Systems run in registration order. Fixed systems use the project's fixed timestep.
+Game-specific state belongs in `Resources`, keyed by its Rust type. The engine
+provides typed `Events` queues for communication between systems; an event remains
+queued until a system drains its type. The engine builder rejects missing scenes,
+invalid timing, invalid resolutions, invalid asset contracts, and named system
+failures instead of starting a partially configured game.
+
+The complete downstream-style program is [`examples/custom_game.rs`](examples/custom_game.rs):
+
+```sh
+cargo run --example custom_game
+```
+
+Pass a built `GameEngine` to `run_live_game(game, options)` to run its schedules and
+stream world changes into an interactive GPU window. Use
+`run_live_renderer(scene, options)` when a static scene and free camera are enough.
+Live rendering currently accepts one directional light and six local or spot lights;
+it returns an explicit scene error above those limits. A live game may spawn and
+remove meshes that use its startup material table, but it cannot add materials after
+the GPU resources have been created. Light color and intensity can change at runtime.
+Light types, order, and shadow flags are fixed after startup; local shadow-casting
+lights also keep their startup transforms. The renderer reports an error if a game
+breaks one of these GPU resource contracts.
+[`examples/live_custom_scene.rs`](examples/live_custom_scene.rs) is the smallest
+complete windowed client:
+
+```sh
+cargo run --example live_custom_scene
+```
+
+## Run the bundled renderer showcase
+
+The live path uses `wgpu` with standard raster and compute shaders, not hardware
+ray-tracing APIs or a vendor SDK. Enable `demo-content` when running repository
+showcases:
 
 ## Run the live GPU renderer
 
 ```sh
-cargo run --release -- --live
+cargo run --release --features demo-content -- --live
 ```
 
 The default scene is a rain-soaked monsoon city scene assembled from vendored Poly
@@ -21,8 +94,8 @@ right mouse to mouselook; use `W`/`A`/`S`/`D` to move, `Q`/`E` to descend/ascend
 Select a present-capable adapter by name when testing multiple GPUs:
 
 ```sh
-DHOOL_GPU=AMD cargo run --release -- --live
-DHOOL_GPU=NVIDIA cargo run --release -- --live
+DHOOL_GPU=AMD cargo run --release --features demo-content -- --live
+DHOOL_GPU=NVIDIA cargo run --release --features demo-content -- --live
 ```
 
 The GPU frame executes cached directional/local shadow maps, a vertex-only
@@ -65,13 +138,13 @@ scripts/fetch_aaa_assets.sh
 ## Run the reference frame
 
 ```sh
-cargo run --release -- --dump-ppm frame.ppm
+cargo run --release --features demo-content -- --dump-ppm frame.ppm
 ```
 
 ## Build the complete demo gallery
 
 ```sh
-cargo run --release -- --gallery demo-output
+cargo run --release --features demo-content -- --gallery demo-output
 python3 -m http.server 8080 -d demo-output
 ```
 
@@ -85,7 +158,7 @@ Asset origins, licenses, and refresh commands are recorded in
 pass another core glTF 2.0 asset:
 
 ```sh
-cargo run --release -- --gallery demo-output --asset path/to/model.gltf
+cargo run --release --features demo-content -- --gallery demo-output --asset path/to/model.gltf
 ```
 
 ## Verify
@@ -94,14 +167,16 @@ cargo run --release -- --gallery demo-output --asset path/to/model.gltf
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
-DHOOL_GPU=AMD cargo run --release -- --live --frames 4
-DHOOL_GPU=NVIDIA cargo run --release -- --live --frames 4
+cargo clippy --all-features --all-targets -- -D warnings
+cargo test --all-features --all-targets
+DHOOL_GPU=AMD cargo run --release --features demo-content -- --live --frames 4
+DHOOL_GPU=NVIDIA cargo run --release --features demo-content -- --live --frames 4
 ```
 
 Use a fixed camera and an overlay-free capture when comparing lighting changes:
 
 ```sh
-DHOOL_GPU=AMD cargo run --release -- --live --map dust2 --static-camera \
+DHOOL_GPU=AMD cargo run --release --features demo-content -- --live --map dust2 --static-camera \
   --frames 40 --capture /tmp/dhool-dust2.png
 ```
 

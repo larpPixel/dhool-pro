@@ -1,6 +1,7 @@
 use dhool_pro::{
-    backend::supported_backends_for_target, build_baseline_frame_graph, export_demo_gallery,
-    run_live_renderer, FrameInput, GameEngine, LiveOptions, ProjectSettings, RenderConfig,
+    backend::supported_backends_for_target, build_aaa_scene, build_asset_showcase,
+    build_baseline_frame_graph, build_dust2_scene, export_demo_gallery, run_live_renderer,
+    FrameInput, GameEngine, LiveOptions, ProjectSettings, RenderConfig,
 };
 
 fn main() {
@@ -22,24 +23,34 @@ fn main() {
         let display_brightness = option_f32(&args, "--display-brightness").unwrap_or(1.0);
         let profile_gpu = args.iter().any(|arg| arg == "--profile-gpu");
         let static_camera = args.iter().any(|arg| arg == "--static-camera");
-        if let Err(error) = run_live_renderer(LiveOptions {
-            asset: asset.into(),
-            map,
-            max_frames,
-            width: 1280,
-            height: 720,
-            capture_path,
-            exposure_min,
-            exposure_max,
-            exposure_compensation,
-            white_balance_strength,
-            velocity_compensation_strength,
-            camera_velocity_cutoff,
-            display_gamma,
-            display_brightness,
-            profile_gpu,
-            static_camera,
-        }) {
+        let scene = match map.as_deref() {
+            Some("dust2") => build_dust2_scene("assets/dust2"),
+            _ if std::path::Path::new(&asset).is_dir() => build_aaa_scene(&asset),
+            _ => build_asset_showcase(&asset),
+        }
+        .unwrap_or_else(|error| {
+            eprintln!("scene load failed: {error}");
+            std::process::exit(2);
+        });
+        if let Err(error) = run_live_renderer(
+            scene,
+            LiveOptions {
+                max_frames,
+                width: 1280,
+                height: 720,
+                capture_path,
+                exposure_min,
+                exposure_max,
+                exposure_compensation,
+                white_balance_strength,
+                velocity_compensation_strength,
+                camera_velocity_cutoff,
+                display_gamma,
+                display_brightness,
+                profile_gpu,
+                static_camera,
+            },
+        ) {
             eprintln!("live renderer failed: {error}");
             std::process::exit(2);
         }
@@ -70,7 +81,8 @@ fn main() {
         native_width: 320,
         native_height: 180,
         ..ProjectSettings::default()
-    });
+    })
+    .expect("valid demo settings");
     let import_report = engine.load_demo_project();
     engine.set_render_config(RenderConfig {
         width: 320,

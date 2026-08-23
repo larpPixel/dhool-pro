@@ -1,9 +1,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+//! Reusable game runtime and vendor-agnostic renderer.
+//!
+//! Start with [`SceneBuilder`] and [`GameEngine::builder`]. Repository showcase
+//! assets and map constructors are available only with the `demo-content` feature.
 
 pub mod asset;
 pub mod asset_pipeline;
 pub mod backend;
 pub mod cloth;
+#[cfg(feature = "demo-content")]
 pub mod demo;
 pub mod game;
 pub mod gltf_import;
@@ -15,31 +20,43 @@ pub mod perf;
 pub mod profiler;
 pub mod quality;
 pub mod renderer;
+pub mod runtime;
 pub mod scene;
+pub mod scene_builder;
 pub mod world;
 
 pub use asset::{
     validate_asset, validate_material, validate_mesh, AssetIssue, MaterialDesc, MeshDesc,
+    ShadowCasterClass,
 };
 pub use asset_pipeline::{AssetId, AssetPipeline, ImportReport, ImportSeverity, ImportedAsset};
 pub use backend::{BackendApi, BackendCapabilities};
 pub use cloth::{
     ClothColliderSnapshot, ClothDefinition, ClothError, ClothPin, ClothSettings, ClothState,
 };
+#[cfg(feature = "demo-content")]
 pub use demo::{export_demo_gallery, DemoSummary};
 pub use game::{
-    build_better_than_unity_unreal_demo, EngineFrame, FrameInput, GameEngine, InputState,
-    ProjectSettings, TargetPlatform,
+    EngineBuildError, EngineError, EngineFrame, EnginePlugin, EngineUpdate, FlyCameraPlugin,
+    FrameInput, GameEngine, GameEngineBuilder, InputState, ProjectSettings, TargetPlatform,
 };
 pub use gltf_import::{import_gltf, GltfImportError};
-pub use gpu::{run_live_renderer, LiveOptions};
+pub use gpu::{run_live_game, run_live_renderer, LiveError, LiveOptions};
 pub use graph::{build_baseline_frame_graph, FeatureCategory, GraphIssue, RenderGraph};
 pub use profiler::{required_debug_views, EngineProfiler, FrameBudget, FrameReport, GateFailure};
 pub use quality::QualityTier;
 pub use renderer::{CpuRenderer, DebugView, RenderConfig, RenderOutput, RenderPath};
-pub use scene::{
-    build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene, Camera,
-    EnvironmentEncoding, EnvironmentMap, EnvironmentProfile, ExposureProfile, Light, Material,
-    Mesh, RenderScene, TextureImage,
+pub use runtime::{
+    Events, GameSystem, Resources, Schedule, SystemContext, SystemFailure, SystemResult, Time,
 };
-pub use world::{CameraRig, EntityId, MeshRenderer, RigidBody, Transform, World};
+#[cfg(feature = "demo-content")]
+pub use scene::{build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene};
+pub use scene::{
+    Camera, EnvironmentEncoding, EnvironmentMap, EnvironmentProfile, ExposureProfile, Light,
+    LightKind, Material, MaterialClass, MaterialFlags, Mesh, RenderScene, TextureImage, Vertex,
+};
+pub use scene_builder::{MaterialId, SceneBuildError, SceneBuilder};
+pub use world::{
+    CameraRig, Collider, EntityId, LightComponent, MeshRenderer, Name, PhysicsSettings, RigidBody,
+    ScriptState, Transform, World, WorldIssue,
+};

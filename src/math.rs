@@ -250,6 +250,30 @@ impl Mat4 {
         }
     }
 
+    pub fn rotation_x(radians: f32) -> Self {
+        let (sin, cos) = radians.sin_cos();
+        Self {
+            m: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, cos, sin, 0.0],
+                [0.0, -sin, cos, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        }
+    }
+
+    pub fn rotation_z(radians: f32) -> Self {
+        let (sin, cos) = radians.sin_cos();
+        Self {
+            m: [
+                [cos, sin, 0.0, 0.0],
+                [-sin, cos, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        }
+    }
+
     pub fn perspective_rh(fovy_radians: f32, aspect: f32, near: f32, far: f32) -> Self {
         let f = 1.0 / (fovy_radians * 0.5).tan();
         let nf = 1.0 / (near - far);

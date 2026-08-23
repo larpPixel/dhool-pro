@@ -39,6 +39,7 @@ pub struct Name(pub String);
 pub struct Transform {
     pub previous_position: Vec3,
     pub position: Vec3,
+    pub rotation: Vec3,
     pub scale: Vec3,
 }
 
@@ -46,6 +47,7 @@ impl Transform {
     pub const IDENTITY: Self = Self {
         previous_position: Vec3::ZERO,
         position: Vec3::ZERO,
+        rotation: Vec3::ZERO,
         scale: Vec3::ONE,
     };
 
@@ -53,12 +55,17 @@ impl Transform {
         Self {
             previous_position: position,
             position,
+            rotation: Vec3::ZERO,
             scale: Vec3::ONE,
         }
     }
 
     pub fn matrix(self) -> Mat4 {
-        Mat4::translation(self.position) * Mat4::scale(self.scale)
+        Mat4::translation(self.position)
+            * Mat4::rotation_y(self.rotation.y)
+            * Mat4::rotation_x(self.rotation.x)
+            * Mat4::rotation_z(self.rotation.z)
+            * Mat4::scale(self.scale)
     }
 
     pub fn velocity(self, dt: f32) -> Vec3 {
@@ -98,6 +105,21 @@ pub struct RigidBody {
     pub mass: f32,
     pub gravity_scale: f32,
     pub dynamic: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PhysicsSettings {
+    pub gravity: Vec3,
+    pub floor_height: Option<f32>,
+}
+
+impl Default for PhysicsSettings {
+    fn default() -> Self {
+        Self {
+            gravity: Vec3::new(0.0, -9.81, 0.0),
+            floor_height: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -144,6 +166,7 @@ pub struct World {
     cloths: HashMap<EntityId, ClothState>,
     colliders: HashMap<EntityId, Collider>,
     scripts: HashMap<EntityId, ScriptState>,
+    pub physics: PhysicsSettings,
     pub materials: Vec<Material>,
     pub ambient_color: Color,
     pub environment_map: EnvironmentMap,
@@ -165,6 +188,7 @@ impl Default for World {
             cloths: HashMap::new(),
             colliders: HashMap::new(),
             scripts: HashMap::new(),
+            physics: PhysicsSettings::default(),
             materials: Vec::new(),
             ambient_color: Color::rgb(0.035, 0.045, 0.055),
             environment_map: EnvironmentMap::solid(Color::rgb(0.08, 0.12, 0.18)),
@@ -312,6 +336,97 @@ impl World {
         }
     }
 
+    pub fn entities(&self) -> impl Iterator<Item = EntityId> + '_ {
+        self.slots.iter().enumerate().filter_map(|(index, slot)| {
+            slot.alive.then_some(EntityId {
+                index: index as u32,
+                generation: slot.generation,
+            })
+        })
+    }
+
+    pub fn name(&self, id: EntityId) -> Option<&str> {
+        self.names
+            .get(&id)
+            .filter(|_| self.is_alive(id))
+            .map(|name| name.0.as_str())
+    }
+
+    pub fn find_by_name(&self, name: &str) -> Option<EntityId> {
+        self.names
+            .iter()
+            .find_map(|(id, candidate)| (self.is_alive(*id) && candidate.0 == name).then_some(*id))
+    }
+
+    pub fn camera(&self, id: EntityId) -> Option<&CameraRig> {
+        self.cameras.get(&id).filter(|_| self.is_alive(id))
+    }
+
+    pub fn camera_mut(&mut self, id: EntityId) -> Option<&mut CameraRig> {
+        if self.is_alive(id) {
+            self.cameras.get_mut(&id)
+        } else {
+            None
+        }
+    }
+
+    pub fn active_camera(&self) -> Option<(EntityId, &CameraRig)> {
+        self.cameras
+            .iter()
+            .find(|(id, camera)| self.is_alive(**id) && camera.active)
+            .map(|(id, camera)| (*id, camera))
+    }
+
+    pub fn active_camera_mut(&mut self) -> Option<(EntityId, &mut CameraRig)> {
+        let id = self
+            .cameras
+            .iter()
+            .find_map(|(id, camera)| (self.is_alive(*id) && camera.active).then_some(*id))?;
+        Some((id, self.cameras.get_mut(&id).expect("active camera exists")))
+    }
+
+    pub fn set_active_camera(&mut self, id: EntityId) -> bool {
+        if !self.is_alive(id) || !self.cameras.contains_key(&id) {
+            return false;
+        }
+        for camera in self.cameras.values_mut() {
+            camera.active = false;
+        }
+        self.cameras
+            .get_mut(&id)
+            .expect("camera checked above")
+            .active = true;
+        true
+    }
+
+    pub fn rigid_body(&self, id: EntityId) -> Option<&RigidBody> {
+        self.rigid_bodies.get(&id).filter(|_| self.is_alive(id))
+    }
+
+    pub fn rigid_body_mut(&mut self, id: EntityId) -> Option<&mut RigidBody> {
+        if self.is_alive(id) {
+            self.rigid_bodies.get_mut(&id)
+        } else {
+            None
+        }
+    }
+
+    pub fn collider(&self, id: EntityId) -> Option<&Collider> {
+        self.colliders.get(&id).filter(|_| self.is_alive(id))
+    }
+
+    pub fn script(&self, id: EntityId) -> Option<&ScriptState> {
+        self.scripts.get(&id).filter(|_| self.is_alive(id))
+    }
+
+    pub fn script_mut(&mut self, id: EntityId) -> Option<&mut ScriptState> {
+        if self.is_alive(id) {
+            self.scripts.get_mut(&id)
+        } else {
+            None
+        }
+    }
+
     pub fn mesh_renderer(&self, id: EntityId) -> Option<&MeshRenderer> {
         self.mesh_renderers.get(&id).filter(|_| self.is_alive(id))
     }
@@ -322,6 +437,7 @@ impl World {
 
     pub fn fixed_update(&mut self, dt: f32) -> Result<(), ClothError> {
         let dt = dt.max(0.0);
+        let physics = self.physics;
         let ids: Vec<EntityId> = self.rigid_bodies.keys().copied().collect();
         for id in ids {
             if !self.is_alive(id) {
@@ -335,12 +451,14 @@ impl World {
             };
             transform.previous_position = transform.position;
             if body.dynamic {
-                body.velocity += Vec3::new(0.0, -9.81 * body.gravity_scale * dt, 0.0);
+                body.velocity += physics.gravity * (body.gravity_scale * dt);
                 transform.position += body.velocity * dt;
-                if transform.position.y < -0.8 {
-                    transform.position.y = -0.8;
-                    if body.velocity.y < 0.0 {
-                        body.velocity.y = 0.0;
+                if let Some(floor) = physics.floor_height {
+                    if transform.position.y < floor {
+                        transform.position.y = floor;
+                        if body.velocity.y < 0.0 {
+                            body.velocity.y = 0.0;
+                        }
                     }
                 }
             }
@@ -352,7 +470,10 @@ impl World {
         }
         let mut collider_ids: Vec<_> = self.colliders.keys().copied().collect();
         collider_ids.sort_unstable();
-        let mut cloth_colliders = vec![ClothColliderSnapshot::floor(-0.8)];
+        let mut cloth_colliders = Vec::new();
+        if let Some(floor) = physics.floor_height {
+            cloth_colliders.push(ClothColliderSnapshot::floor(floor));
+        }
         for id in collider_ids {
             let position = self
                 .transforms
@@ -433,12 +554,15 @@ impl World {
             });
 
         let mut meshes = Vec::new();
-        for (entity, renderer) in &self.mesh_renderers {
-            if !self.is_alive(*entity) || !renderer.visible {
+        let mut mesh_entities: Vec<_> = self.mesh_renderers.keys().copied().collect();
+        mesh_entities.sort_unstable();
+        for entity in mesh_entities {
+            let renderer = &self.mesh_renderers[&entity];
+            if !self.is_alive(entity) || !renderer.visible {
                 continue;
             }
             let mut mesh = renderer.mesh.clone();
-            if let Some(transform) = self.transforms.get(entity) {
+            if let Some(transform) = self.transforms.get(&entity) {
                 mesh.transform = mesh.transform * transform.matrix();
             }
             mesh.prepass_eligible = renderer.prepass_eligible;
@@ -450,8 +574,11 @@ impl World {
         }
 
         let mut lights = Vec::new();
-        for (entity, component) in &self.lights {
-            if !self.is_alive(*entity) {
+        let mut light_entities: Vec<_> = self.lights.keys().copied().collect();
+        light_entities.sort_unstable();
+        for entity in light_entities {
+            let component = &self.lights[&entity];
+            if !self.is_alive(entity) {
                 continue;
             }
             let kind = match component.kind {
@@ -459,7 +586,7 @@ impl World {
                 LightKind::Local { radius, .. } => {
                     let position = self
                         .transforms
-                        .get(entity)
+                        .get(&entity)
                         .map(|t| t.position)
                         .unwrap_or(Vec3::ZERO);
                     LightKind::Local { position, radius }
@@ -473,7 +600,7 @@ impl World {
                 } => {
                     let position = self
                         .transforms
-                        .get(entity)
+                        .get(&entity)
                         .map(|t| t.position)
                         .unwrap_or(Vec3::ZERO);
                     LightKind::Spot {
@@ -486,7 +613,11 @@ impl World {
                 }
             };
             lights.push(Light {
-                name: "world_light",
+                name: self
+                    .names
+                    .get(&entity)
+                    .map(|name| name.0.clone())
+                    .unwrap_or_else(|| "world_light".to_string()),
                 kind,
                 color: component.color,
                 intensity: component.intensity,
@@ -512,6 +643,7 @@ impl World {
             mesh_renderers,
             cameras,
             lights: light_components,
+            names,
             materials,
             ambient_color,
             environment_map,
@@ -587,7 +719,10 @@ impl World {
                     },
                 };
                 Some(Light {
-                    name: "world_light",
+                    name: names
+                        .get(&entity)
+                        .map(|name| name.0.clone())
+                        .unwrap_or_else(|| "world_light".to_string()),
                     kind,
                     color: component.color,
                     intensity: component.intensity,

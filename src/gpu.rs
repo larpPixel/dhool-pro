@@ -1,14 +1,14 @@
 use crate::cloth::{ClothColliderSnapshot, ClothState};
-use crate::math::{Vec3, Vec4};
-use crate::scene::{
-    build_aaa_scene, build_asset_showcase, build_dust2_scene, EnvironmentMap, LightKind, Material,
-    RenderScene, TextureImage,
-};
+use crate::game::{FrameInput, GameEngine, InputState};
+use crate::math::{Vec2, Vec3, Vec4};
+use crate::scene::{EnvironmentMap, LightKind, Material, RenderScene, TextureImage};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3 as GpuVec3};
 use half::f16;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -42,7 +42,6 @@ const CAMERA_MOVE_SPEED: f32 = 8.0;
 const CAMERA_FAST_MULTIPLIER: f32 = 3.5;
 const CAMERA_LOOK_SPEED: f32 = 1.55;
 const CAMERA_MOUSE_LOOK_SPEED: f32 = 0.0025;
-const GENERATED_RAIN_STREAK_DETAIL: &str = "assets/aaa/rain/generated_streak_detail.png";
 // Keep the expanded Dust II precipitation volume at the original rain density.
 const RAIN_DROP_COUNT: u32 = 32_768;
 const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
@@ -66,10 +65,32 @@ const GPU_STAGE_NAMES: [&str; 6] = [
     "UI + gamma presentation",
 ];
 
+fn generated_rain_streak_detail() -> TextureImage {
+    const WIDTH: u32 = 32;
+    const HEIGHT: u32 = 64;
+    let mut pixels = Vec::with_capacity((WIDTH * HEIGHT) as usize);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let horizontal = ((x as f32 + 0.5) / WIDTH as f32 - 0.5).abs() * 2.0;
+            let core = (1.0 - horizontal).max(0.0).powf(5.0);
+            let vertical = ((y as f32 + 0.5) / HEIGHT as f32 * std::f32::consts::PI)
+                .sin()
+                .max(0.0);
+            let intensity = core * vertical;
+            pixels.push(crate::math::Color::new(
+                intensity, intensity, intensity, intensity,
+            ));
+        }
+    }
+    TextureImage {
+        width: WIDTH,
+        height: HEIGHT,
+        pixels,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveOptions {
-    pub asset: PathBuf,
-    pub map: Option<String>,
     pub max_frames: Option<u64>,
     pub width: u32,
     pub height: u32,
@@ -86,13 +107,48 @@ pub struct LiveOptions {
     pub static_camera: bool,
 }
 
-pub fn run_live_renderer(options: LiveOptions) -> Result<(), LiveError> {
+impl Default for LiveOptions {
+    fn default() -> Self {
+        Self {
+            max_frames: None,
+            width: 1280,
+            height: 720,
+            capture_path: None,
+            exposure_min: None,
+            exposure_max: None,
+            exposure_compensation: None,
+            white_balance_strength: None,
+            velocity_compensation_strength: 0.65,
+            camera_velocity_cutoff: 8.0,
+            display_gamma: 2.2,
+            display_brightness: 1.0,
+            profile_gpu: false,
+            static_camera: false,
+        }
+    }
+}
+
+pub fn run_live_renderer(scene: RenderScene, options: LiveOptions) -> Result<(), LiveError> {
     let event_loop = EventLoop::new().map_err(|error| LiveError::Window(error.to_string()))?;
-    let mut application = LiveApplication::new(options);
+    let mut application = LiveApplication::new_scene(scene, options);
+    run_live_application(event_loop, &mut application)
+}
+
+/// Runs game schedules and streams the resulting world into the live GPU renderer.
+pub fn run_live_game(game: GameEngine, options: LiveOptions) -> Result<(), LiveError> {
+    let event_loop = EventLoop::new().map_err(|error| LiveError::Window(error.to_string()))?;
+    let mut application = LiveApplication::new_game(game, options);
+    run_live_application(event_loop, &mut application)
+}
+
+fn run_live_application(
+    event_loop: EventLoop<()>,
+    application: &mut LiveApplication,
+) -> Result<(), LiveError> {
     event_loop
-        .run_app(&mut application)
+        .run_app(application)
         .map_err(|error| LiveError::Window(error.to_string()))?;
-    if let Some(error) = application.error {
+    if let Some(error) = application.error.take() {
         Err(error)
     } else {
         Ok(())
@@ -107,6 +163,7 @@ pub enum LiveError {
     AdapterUnavailable,
     Device(String),
     Capture(String),
+    Engine(String),
 }
 
 impl fmt::Display for LiveError {
@@ -118,13 +175,50 @@ impl fmt::Display for LiveError {
             Self::AdapterUnavailable => write!(formatter, "no compatible GPU adapter"),
             Self::Device(message) => write!(formatter, "GPU device error: {message}"),
             Self::Capture(message) => write!(formatter, "capture error: {message}"),
+            Self::Engine(message) => write!(formatter, "game update failed: {message}"),
         }
     }
 }
 
 impl std::error::Error for LiveError {}
 
+enum LiveContent {
+    Scene(Option<Box<RenderScene>>),
+    Game(Box<GameEngine>),
+}
+
+#[derive(Default)]
+struct LiveGameInput {
+    keys: CameraKeys,
+    look_delta: Vec2,
+    primary_action: bool,
+    secondary_action: bool,
+    mouse_look: bool,
+}
+
+impl LiveGameInput {
+    fn state(&self) -> InputState {
+        InputState {
+            move_axis: Vec3::new(
+                (self.keys.move_right as u8 as f32) - (self.keys.move_left as u8 as f32),
+                (self.keys.move_up as u8 as f32) - (self.keys.move_down as u8 as f32),
+                (self.keys.move_forward as u8 as f32) - (self.keys.move_back as u8 as f32),
+            ),
+            look_delta: self.look_delta,
+            primary_action: self.primary_action,
+            secondary_action: self.secondary_action,
+        }
+    }
+
+    fn finish_frame(&mut self) {
+        self.look_delta = Vec2::ZERO;
+        self.primary_action = false;
+        self.secondary_action = false;
+    }
+}
+
 struct LiveApplication {
+    content: LiveContent,
     options: LiveOptions,
     window: Option<Arc<Window>>,
     renderer: Option<GpuRenderer>,
@@ -132,11 +226,22 @@ struct LiveApplication {
     frame_count: u64,
     title_clock: Instant,
     title_frames: u32,
+    game_input: LiveGameInput,
+    game_clock: Instant,
 }
 
 impl LiveApplication {
-    fn new(options: LiveOptions) -> Self {
+    fn new_scene(scene: RenderScene, options: LiveOptions) -> Self {
+        Self::new(LiveContent::Scene(Some(Box::new(scene))), options)
+    }
+
+    fn new_game(game: GameEngine, options: LiveOptions) -> Self {
+        Self::new(LiveContent::Game(Box::new(game)), options)
+    }
+
+    fn new(content: LiveContent, options: LiveOptions) -> Self {
         Self {
+            content,
             options,
             window: None,
             renderer: None,
@@ -144,6 +249,8 @@ impl LiveApplication {
             frame_count: 0,
             title_clock: Instant::now(),
             title_frames: 0,
+            game_input: LiveGameInput::default(),
+            game_clock: Instant::now(),
         }
     }
 
@@ -170,12 +277,17 @@ impl ApplicationHandler for LiveApplication {
                 return;
             }
         };
+        let dynamic_game = matches!(self.content, LiveContent::Game(_));
+        let scene = match &mut self.content {
+            LiveContent::Scene(scene) => *scene.take().expect("scene is consumed once"),
+            LiveContent::Game(game) => game.world.build_render_scene(),
+        };
         let renderer = match pollster::block_on(GpuRenderer::new(
             window.clone(),
-            self.options.asset.clone(),
-            self.options.map.clone(),
+            scene,
             self.options.capture_path.clone(),
             LiveRendererConfig::from_options(&self.options),
+            dynamic_game,
         )) {
             Ok(renderer) => renderer,
             Err(error) => {
@@ -226,6 +338,12 @@ impl ApplicationHandler for LiveApplication {
                 let pressed = event.state == ElementState::Pressed;
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::Escape) if pressed => event_loop.exit(),
+                    PhysicalKey::Code(code) if matches!(self.content, LiveContent::Game(_)) => {
+                        if code == KeyCode::Space && pressed && !event.repeat {
+                            self.game_input.primary_action = true;
+                        }
+                        set_camera_key(&mut self.game_input.keys, code, pressed);
+                    }
                     PhysicalKey::Code(KeyCode::Space) if pressed && !event.repeat => {
                         renderer.toggle_auto_orbit();
                     }
@@ -238,16 +356,47 @@ impl ApplicationHandler for LiveApplication {
                 button: MouseButton::Right,
                 ..
             } => {
-                if let Some(renderer) = self.renderer.as_mut() {
-                    let pressed = state == ElementState::Pressed;
+                let pressed = state == ElementState::Pressed;
+                if matches!(self.content, LiveContent::Game(_)) {
+                    self.game_input.mouse_look = pressed;
+                    window.set_cursor_visible(!pressed);
+                } else if let Some(renderer) = self.renderer.as_mut() {
                     renderer.set_mouse_look(pressed);
                     window.set_cursor_visible(!pressed);
                 }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if matches!(self.content, LiveContent::Game(_)) => {
+                self.game_input.secondary_action = true;
             }
             WindowEvent::RedrawRequested => {
                 let Some(renderer) = self.renderer.as_mut() else {
                     return;
                 };
+                if let LiveContent::Game(game) = &mut self.content {
+                    let now = Instant::now();
+                    let delta_seconds = now
+                        .duration_since(self.game_clock)
+                        .as_secs_f32()
+                        .clamp(0.0, 0.25);
+                    self.game_clock = now;
+                    if let Err(error) = game.advance(FrameInput {
+                        delta_seconds,
+                        input: self.game_input.state(),
+                    }) {
+                        self.fail(event_loop, LiveError::Engine(error.to_string()));
+                        return;
+                    }
+                    let scene = game.world.build_render_scene();
+                    if let Err(error) = renderer.update_scene(&scene) {
+                        self.fail(event_loop, LiveError::Scene(error));
+                        return;
+                    }
+                    self.game_input.finish_frame();
+                }
                 if let Err(message) = renderer.update() {
                     self.fail(event_loop, LiveError::Scene(message));
                     return;
@@ -301,7 +450,14 @@ impl ApplicationHandler for LiveApplication {
             return;
         };
         if let DeviceEvent::MouseMotion { delta } = event {
-            renderer.apply_mouse_delta(delta);
+            if matches!(self.content, LiveContent::Game(_)) {
+                if self.game_input.mouse_look {
+                    self.game_input.look_delta.x += delta.0 as f32;
+                    self.game_input.look_delta.y -= delta.1 as f32;
+                }
+            } else {
+                renderer.apply_mouse_delta(delta);
+            }
         }
     }
 
@@ -716,6 +872,24 @@ fn apply_camera_keys_to_pose(
     rotate_camera_target(camera_origin, camera_target, yaw, pitch);
 }
 
+fn set_camera_key(keys: &mut CameraKeys, code: KeyCode, pressed: bool) -> bool {
+    match code {
+        KeyCode::KeyW => keys.move_forward = pressed,
+        KeyCode::KeyS => keys.move_back = pressed,
+        KeyCode::KeyA => keys.move_left = pressed,
+        KeyCode::KeyD => keys.move_right = pressed,
+        KeyCode::KeyE => keys.move_up = pressed,
+        KeyCode::KeyQ => keys.move_down = pressed,
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => keys.boost = pressed,
+        KeyCode::ArrowLeft => keys.look_left = pressed,
+        KeyCode::ArrowRight => keys.look_right = pressed,
+        KeyCode::ArrowUp => keys.look_up = pressed,
+        KeyCode::ArrowDown => keys.look_down = pressed,
+        _ => return false,
+    }
+    true
+}
+
 fn rotate_camera_target(
     camera_origin: &mut GpuVec3,
     camera_target: &mut GpuVec3,
@@ -879,6 +1053,12 @@ struct GpuRenderer {
     adapter: wgpu::AdapterInfo,
     vertex_buffer: wgpu::Buffer,
     previous_position_buffer: wgpu::Buffer,
+    dynamic_vertices: Vec<GpuVertex>,
+    dynamic_indices: Vec<u32>,
+    dynamic_material_signatures: Vec<u64>,
+    dynamic_environment_map: EnvironmentMap,
+    dynamic_light_layout: Vec<(u8, bool)>,
+    dynamic_local_shadow_kinds: Vec<(usize, LightKind)>,
     index_buffer: wgpu::Buffer,
     batches: Vec<DrawBatch>,
     materials: Vec<GpuMaterial>,
@@ -890,7 +1070,7 @@ struct GpuRenderer {
     _exposure_buffer: wgpu::Buffer,
     _velocity_compensation_buffer: wgpu::Buffer,
     _display_buffer: wgpu::Buffer,
-    _reflection_proxy_buffer: wgpu::Buffer,
+    reflection_proxy_buffer: wgpu::Buffer,
     aa_buffer: wgpu::Buffer,
     shadow_camera_buffer: wgpu::Buffer,
     shadow_camera_bind_group: wgpu::BindGroup,
@@ -1016,11 +1196,12 @@ struct GpuTimestampProfiler {
 impl GpuRenderer {
     async fn new(
         window: Arc<Window>,
-        asset: PathBuf,
-        map: Option<String>,
+        mut scene: RenderScene,
         capture_path: Option<PathBuf>,
         renderer_config: LiveRendererConfig,
+        dynamic_game: bool,
     ) -> Result<Self, LiveError> {
+        validate_live_scene(&scene)?;
         let LiveRendererConfig {
             exposure,
             velocity_compensation,
@@ -1028,12 +1209,6 @@ impl GpuRenderer {
             profile_gpu,
             static_camera,
         } = renderer_config;
-        let mut scene = match map.as_deref() {
-            Some("dust2") => build_dust2_scene(PathBuf::from("assets/dust2")),
-            _ if asset.is_dir() => build_aaa_scene(&asset),
-            _ => build_asset_showcase(&asset),
-        }
-        .map_err(|error| LiveError::Scene(error.to_string()))?;
         for mesh in &mut scene.meshes {
             if mesh.cloth.is_some() {
                 mesh.bake_transform();
@@ -1165,26 +1340,40 @@ impl GpuRenderer {
             indices,
             batches,
             cloth_vertex_ranges,
-        } = flatten_scene(&scene);
-        let cloths = scene
-            .meshes
+        } = flatten_scene(&scene, !dynamic_game);
+        let cloths = if dynamic_game {
+            Vec::new()
+        } else {
+            scene
+                .meshes
+                .iter()
+                .zip(cloth_vertex_ranges)
+                .filter_map(|(mesh, vertex_range)| {
+                    let definition = mesh.cloth.as_ref()?;
+                    let vertex_range = vertex_range?;
+                    Some(
+                        ClothState::new(&mesh.vertices, &mesh.indices, definition).map(|state| {
+                            LiveCloth {
+                                state,
+                                mesh: mesh.clone(),
+                                vertex_range,
+                            }
+                        }),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| LiveError::Scene(error.to_string()))?
+        };
+        let dynamic_vertices = vertices.clone();
+        let dynamic_indices = indices.clone();
+        let dynamic_material_signatures = scene
+            .materials
             .iter()
-            .zip(cloth_vertex_ranges)
-            .filter_map(|(mesh, vertex_range)| {
-                let definition = mesh.cloth.as_ref()?;
-                let vertex_range = vertex_range?;
-                Some(
-                    ClothState::new(&mesh.vertices, &mesh.indices, definition).map(|state| {
-                        LiveCloth {
-                            state,
-                            mesh: mesh.clone(),
-                            vertex_range,
-                        }
-                    }),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| LiveError::Scene(error.to_string()))?;
+            .map(material_runtime_signature)
+            .collect();
+        let dynamic_environment_map = scene.environment_map.clone();
+        let dynamic_light_layout = light_runtime_layout(&scene);
+        let dynamic_local_shadow_kinds = local_shadow_kinds(&scene);
         let light_uniform = LightUniform::from_scene(&scene);
         let local_light_count = light_uniform.directional_direction_count[3]
             .clamp(0.0, MAX_GPU_POINT_LIGHTS as f32) as u32;
@@ -1236,13 +1425,13 @@ impl GpuRenderer {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("reflection-proxy-uniform"),
                 contents: bytemuck::bytes_of(&reflection_proxy_uniform),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
         let shadow_camera = shadow_camera_for_scene(light_uniform, &scene, &vertices);
         let shadow_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("shadow-camera-uniform"),
             contents: bytemuck::bytes_of(&shadow_camera),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let shadow_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shadow-camera-bind-group"),
@@ -1307,10 +1496,7 @@ impl GpuRenderer {
         device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|error| LiveError::Device(error.to_string()))?;
-        let rain_streak_path = PathBuf::from(GENERATED_RAIN_STREAK_DETAIL);
-        let rain_streak_detail = TextureImage::from_path(&rain_streak_path).map_err(|message| {
-            LiveError::Scene(format!("{}: {message}", rain_streak_path.display()))
-        })?;
+        let rain_streak_detail = generated_rain_streak_detail();
         let (rain_streak_texture, rain_streak_view) = upload_material_texture(
             &device,
             &queue,
@@ -1433,6 +1619,12 @@ impl GpuRenderer {
             adapter: adapter_info,
             vertex_buffer,
             previous_position_buffer,
+            dynamic_vertices,
+            dynamic_indices,
+            dynamic_material_signatures,
+            dynamic_environment_map,
+            dynamic_light_layout,
+            dynamic_local_shadow_kinds,
             index_buffer,
             batches,
             materials,
@@ -1445,7 +1637,7 @@ impl GpuRenderer {
             _exposure_buffer: exposure_buffer,
             _velocity_compensation_buffer: velocity_compensation_buffer,
             _display_buffer: display_buffer,
-            _reflection_proxy_buffer: reflection_proxy_buffer,
+            reflection_proxy_buffer,
             shadow_camera_buffer,
             shadow_camera_bind_group,
             _shadow_texture: shadow_texture,
@@ -1511,7 +1703,7 @@ impl GpuRenderer {
             frame_index: 0,
             current_view_projection: Mat4::IDENTITY,
             previous_view_projection: Mat4::IDENTITY,
-            auto_orbit: !static_camera,
+            auto_orbit: !static_camera && !dynamic_game,
             camera_origin,
             camera_target,
             camera_fov_y,
@@ -1578,12 +1770,130 @@ impl GpuRenderer {
             &self._exposure_buffer,
             &self._velocity_compensation_buffer,
             &self._display_buffer,
-            &self._reflection_proxy_buffer,
+            &self.reflection_proxy_buffer,
             &self.local_shadow_array_view,
             &self.local_shadow_buffer,
             &self.environment_view,
             &self.environment_sampler,
         );
+    }
+
+    fn update_scene(&mut self, scene: &RenderScene) -> Result<(), String> {
+        validate_live_scene(scene).map_err(|error| error.to_string())?;
+        let material_signatures: Vec<_> = scene
+            .materials
+            .iter()
+            .map(material_runtime_signature)
+            .collect();
+        if material_signatures != self.dynamic_material_signatures {
+            return Err("live games cannot change the material table after startup".to_string());
+        }
+        let same_environment = Arc::ptr_eq(
+            &scene.environment_map.panorama,
+            &self.dynamic_environment_map.panorama,
+        ) && scene.environment_map.encoding
+            == self.dynamic_environment_map.encoding
+            && scene.environment_map.exposure_ev() == self.dynamic_environment_map.exposure_ev()
+            && scene.environment_map.yaw_radians() == self.dynamic_environment_map.yaw_radians()
+            && scene.environment_map.irradiance_sh()
+                == self.dynamic_environment_map.irradiance_sh();
+        if !same_environment {
+            return Err("live games cannot replace the environment map after startup".to_string());
+        }
+        if light_runtime_layout(scene) != self.dynamic_light_layout {
+            return Err("live games cannot change light topology after startup".to_string());
+        }
+        if local_shadow_kinds(scene) != self.dynamic_local_shadow_kinds {
+            return Err(
+                "live games cannot move local shadow-casting lights after startup".to_string(),
+            );
+        }
+
+        let flattened = flatten_scene(scene, false);
+        let topology_changed = flattened.indices != self.dynamic_indices;
+        let previous_positions =
+            if topology_changed || flattened.vertices.len() != self.dynamic_vertices.len() {
+                flattened.previous_positions.clone()
+            } else {
+                self.dynamic_vertices
+                    .iter()
+                    .map(|vertex| GpuPreviousPosition {
+                        position: vertex.position,
+                    })
+                    .collect()
+            };
+
+        if topology_changed {
+            self.index_buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("dynamic-scene-indices"),
+                    contents: bytemuck::cast_slice(&flattened.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+        }
+        if topology_changed || flattened.vertices.len() != self.dynamic_vertices.len() {
+            self.vertex_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("dynamic-scene-vertices"),
+                        contents: bytemuck::cast_slice(&flattened.vertices),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    });
+            self.previous_position_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("dynamic-scene-previous-positions"),
+                        contents: bytemuck::cast_slice(&previous_positions),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    });
+        } else {
+            self.queue.write_buffer(
+                &self.vertex_buffer,
+                0,
+                bytemuck::cast_slice(&flattened.vertices),
+            );
+            self.queue.write_buffer(
+                &self.previous_position_buffer,
+                0,
+                bytemuck::cast_slice(&previous_positions),
+            );
+        }
+
+        self.dynamic_vertices = flattened.vertices;
+        self.dynamic_indices = flattened.indices;
+        self.batches = flattened.batches;
+        self.camera_origin = GpuVec3::new(
+            scene.camera.position.x,
+            scene.camera.position.y,
+            scene.camera.position.z,
+        );
+        self.camera_target = GpuVec3::new(
+            scene.camera.target.x,
+            scene.camera.target.y,
+            scene.camera.target.z,
+        );
+        self.camera_fov_y = scene.camera.vertical_fov_radians;
+        self.camera_near = scene.camera.near;
+        self.camera_far = scene.camera.far;
+        self.base_light_uniform = LightUniform::from_scene(scene);
+        self.local_light_count = self.base_light_uniform.directional_direction_count[3]
+            .clamp(0.0, MAX_GPU_POINT_LIGHTS as f32) as u32;
+        let shadow_camera =
+            shadow_camera_for_scene(self.base_light_uniform, scene, &self.dynamic_vertices);
+        self.queue.write_buffer(
+            &self.shadow_camera_buffer,
+            0,
+            bytemuck::bytes_of(&shadow_camera),
+        );
+        self.queue.write_buffer(
+            &self.reflection_proxy_buffer,
+            0,
+            bytemuck::bytes_of(&reflection_proxy_uniform(scene)),
+        );
+        self.shadow_cache_ready = false;
+        self.local_shadow_cache_ready.fill(false);
+        Ok(())
     }
 
     fn toggle_auto_orbit(&mut self) {
@@ -1595,53 +1905,7 @@ impl GpuRenderer {
     }
 
     fn set_key(&mut self, code: KeyCode, pressed: bool) {
-        let handled = match code {
-            KeyCode::KeyW => {
-                self.keys.move_forward = pressed;
-                true
-            }
-            KeyCode::KeyS => {
-                self.keys.move_back = pressed;
-                true
-            }
-            KeyCode::KeyA => {
-                self.keys.move_left = pressed;
-                true
-            }
-            KeyCode::KeyD => {
-                self.keys.move_right = pressed;
-                true
-            }
-            KeyCode::KeyE => {
-                self.keys.move_up = pressed;
-                true
-            }
-            KeyCode::KeyQ => {
-                self.keys.move_down = pressed;
-                true
-            }
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => {
-                self.keys.boost = pressed;
-                true
-            }
-            KeyCode::ArrowLeft => {
-                self.keys.look_left = pressed;
-                true
-            }
-            KeyCode::ArrowRight => {
-                self.keys.look_right = pressed;
-                true
-            }
-            KeyCode::ArrowUp => {
-                self.keys.look_up = pressed;
-                true
-            }
-            KeyCode::ArrowDown => {
-                self.keys.look_down = pressed;
-                true
-            }
-            _ => false,
-        };
+        let handled = set_camera_key(&mut self.keys, code, pressed);
         if handled && pressed {
             self.enter_manual_control();
         }
@@ -2583,6 +2847,84 @@ impl GpuRenderer {
     }
 }
 
+fn validate_live_scene(scene: &RenderScene) -> Result<(), LiveError> {
+    let directional_lights = scene
+        .lights
+        .iter()
+        .filter(|light| matches!(light.kind, LightKind::Directional { .. }))
+        .count();
+    if directional_lights > 1 {
+        return Err(LiveError::Scene(format!(
+            "live renderer supports one directional light, got {directional_lights}"
+        )));
+    }
+    let local_lights = scene
+        .lights
+        .iter()
+        .filter(|light| matches!(light.kind, LightKind::Local { .. } | LightKind::Spot { .. }))
+        .count();
+    if local_lights > MAX_GPU_POINT_LIGHTS {
+        return Err(LiveError::Scene(format!(
+            "live renderer supports {MAX_GPU_POINT_LIGHTS} local lights, got {local_lights}"
+        )));
+    }
+    Ok(())
+}
+
+fn light_runtime_layout(scene: &RenderScene) -> Vec<(u8, bool)> {
+    scene
+        .lights
+        .iter()
+        .map(|light| {
+            let kind = match light.kind {
+                LightKind::Directional { .. } => 0,
+                LightKind::Local { .. } => 1,
+                LightKind::Spot { .. } => 2,
+            };
+            (kind, light.casts_shadow)
+        })
+        .collect()
+}
+
+fn local_shadow_kinds(scene: &RenderScene) -> Vec<(usize, LightKind)> {
+    scene
+        .lights
+        .iter()
+        .enumerate()
+        .filter(|(_, light)| {
+            light.casts_shadow && !matches!(light.kind, LightKind::Directional { .. })
+        })
+        .map(|(index, light)| (index, light.kind))
+        .collect()
+}
+
+fn material_runtime_signature(material: &Material) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    material.name.hash(&mut hasher);
+    (material.class as u8).hash(&mut hasher);
+    material.material_id.hash(&mut hasher);
+    material.base_color.r.to_bits().hash(&mut hasher);
+    material.base_color.g.to_bits().hash(&mut hasher);
+    material.base_color.b.to_bits().hash(&mut hasher);
+    material.roughness.to_bits().hash(&mut hasher);
+    material.metallic.to_bits().hash(&mut hasher);
+    material.specular_intensity.to_bits().hash(&mut hasher);
+    material.emission.r.to_bits().hash(&mut hasher);
+    material.emission.g.to_bits().hash(&mut hasher);
+    material.emission.b.to_bits().hash(&mut hasher);
+    for texture in [
+        &material.base_color_texture,
+        &material.normal_texture,
+        &material.pbr_texture,
+    ] {
+        texture
+            .as_ref()
+            .map(|image| (image.width, image.height, image.pixels.len()))
+            .hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 fn copy_presented_frame_to_buffer(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
@@ -2680,8 +3022,8 @@ fn read_gpu_timestamps(
 
     let mapped = profiler.readback_buffer.slice(..).get_mapped_range();
     let mut ticks = [0_u64; GPU_TIMESTAMP_COUNT as usize];
-    for (index, bytes) in mapped.chunks_exact(8).enumerate() {
-        ticks[index] = u64::from_ne_bytes(bytes.try_into().expect("timestamp is eight bytes"));
+    for (index, bytes) in mapped.as_chunks::<8>().0.iter().enumerate() {
+        ticks[index] = u64::from_ne_bytes(*bytes);
     }
     drop(mapped);
     profiler.readback_buffer.unmap();
@@ -2724,7 +3066,9 @@ fn write_pending_frame_capture(
         let dest_row = &mut rgba[dest_start..dest_end];
         match capture.format {
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
-                for (source, dest) in source_row.chunks_exact(4).zip(dest_row.chunks_exact_mut(4)) {
+                let source_pixels = source_row.as_chunks::<4>().0;
+                let dest_pixels = dest_row.as_chunks_mut::<4>().0;
+                for (source, dest) in source_pixels.iter().zip(dest_pixels) {
                     dest[0] = source[2];
                     dest[1] = source[1];
                     dest[2] = source[0];
@@ -3543,7 +3887,7 @@ struct FlattenedScene {
     cloth_vertex_ranges: Vec<Option<Range<u32>>>,
 }
 
-fn flatten_scene(scene: &RenderScene) -> FlattenedScene {
+fn flatten_scene(scene: &RenderScene, sort_for_static_scene: bool) -> FlattenedScene {
     let mut vertices = Vec::new();
     let mut previous_positions = Vec::new();
     let mut indices = Vec::new();
@@ -3555,34 +3899,36 @@ fn flatten_scene(scene: &RenderScene) -> FlattenedScene {
         scene.camera.position.y,
         scene.camera.position.z,
     );
-    meshes.sort_by(|(_, left), (_, right)| {
-        let classify = |mesh: &crate::scene::Mesh| {
-            let material = &scene.materials[mesh.material_index];
-            let alpha_tested = material.flags.alpha_tested;
-            let prepass_eligible = mesh.prepass_eligible && !alpha_tested;
-            (!alpha_tested, prepass_eligible)
-        };
-        let distance_squared = |mesh: &crate::scene::Mesh| {
-            if mesh.vertices.is_empty() {
-                return f32::INFINITY;
-            }
-            let sum = mesh.vertices.iter().fold(GpuVec3::ZERO, |sum, vertex| {
-                let transformed = mesh.transform.mul_vec4(Vec4::new(
-                    vertex.position.x,
-                    vertex.position.y,
-                    vertex.position.z,
-                    1.0,
-                ));
-                sum + GpuVec3::new(transformed.x, transformed.y, transformed.z)
-            });
-            let center = sum / mesh.vertices.len() as f32;
-            center.distance_squared(camera_position)
-        };
-        classify(left)
-            .cmp(&classify(right))
-            .then_with(|| distance_squared(left).total_cmp(&distance_squared(right)))
-            .then_with(|| left.material_index.cmp(&right.material_index))
-    });
+    if sort_for_static_scene {
+        meshes.sort_by(|(_, left), (_, right)| {
+            let classify = |mesh: &crate::scene::Mesh| {
+                let material = &scene.materials[mesh.material_index];
+                let alpha_tested = material.flags.alpha_tested;
+                let prepass_eligible = mesh.prepass_eligible && !alpha_tested;
+                (!alpha_tested, prepass_eligible)
+            };
+            let distance_squared = |mesh: &crate::scene::Mesh| {
+                if mesh.vertices.is_empty() {
+                    return f32::INFINITY;
+                }
+                let sum = mesh.vertices.iter().fold(GpuVec3::ZERO, |sum, vertex| {
+                    let transformed = mesh.transform.mul_vec4(Vec4::new(
+                        vertex.position.x,
+                        vertex.position.y,
+                        vertex.position.z,
+                        1.0,
+                    ));
+                    sum + GpuVec3::new(transformed.x, transformed.y, transformed.z)
+                });
+                let center = sum / mesh.vertices.len() as f32;
+                center.distance_squared(camera_position)
+            };
+            classify(left)
+                .cmp(&classify(right))
+                .then_with(|| distance_squared(left).total_cmp(&distance_squared(right)))
+                .then_with(|| left.material_index.cmp(&right.material_index))
+        });
+    }
     let mut active_batch: Option<(usize, bool, bool, bool, u32)> = None;
     for (scene_mesh_index, mesh) in meshes {
         let material = &scene.materials[mesh.material_index];
@@ -5890,6 +6236,7 @@ fn texture_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry
 mod tests {
     use super::*;
 
+    #[cfg(feature = "demo-content")]
     #[test]
     fn scene_lights_populate_gpu_uniform() {
         let scene = crate::scene::build_demo_scene();
@@ -5911,6 +6258,7 @@ mod tests {
         assert!(uniform.environment_sh[0][0] > 0.0);
     }
 
+    #[cfg(feature = "demo-content")]
     #[test]
     fn dry_environment_does_not_flicker_scene_lights() {
         let mut scene = crate::scene::build_demo_scene();
@@ -5959,5 +6307,46 @@ mod tests {
         assert_eq!(eye, original_eye);
         assert!(target.x.abs() > 0.1);
         assert!(((target - eye).length() - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn live_scene_rejects_lights_it_cannot_render() {
+        let mut scene = crate::SceneBuilder::new();
+        for index in 0..=MAX_GPU_POINT_LIGHTS {
+            scene.add_light(crate::Light::point(
+                format!("light-{index}"),
+                Vec3::new(index as f32, 1.0, 0.0),
+                3.0,
+                crate::math::Color::WHITE,
+                1.0,
+            ));
+        }
+        let scene = scene.build().expect("scene");
+
+        let error = validate_live_scene(&scene).expect_err("light limit");
+        assert!(error.to_string().contains("supports 6 local lights"));
+    }
+
+    #[test]
+    fn dynamic_light_contract_separates_topology_from_mutable_values() {
+        let mut scene = crate::SceneBuilder::new();
+        scene.add_light(crate::Light::point(
+            "lamp",
+            Vec3::new(0.0, 1.0, 0.0),
+            3.0,
+            crate::math::Color::WHITE,
+            1.0,
+        ));
+        let mut scene = scene.build().expect("scene");
+        let layout = light_runtime_layout(&scene);
+        let shadow_kinds = local_shadow_kinds(&scene);
+
+        scene.lights[0].intensity = 4.0;
+        assert_eq!(light_runtime_layout(&scene), layout);
+        assert_eq!(local_shadow_kinds(&scene), shadow_kinds);
+
+        scene.lights[0].casts_shadow = true;
+        assert_ne!(light_runtime_layout(&scene), layout);
+        assert_ne!(local_shadow_kinds(&scene), shadow_kinds);
     }
 }

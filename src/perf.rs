@@ -103,10 +103,7 @@ pub fn reduce_hiz_rgba16(
         return Err(PerfError::OutputRejected);
     }
 
-    Ok(raw
-        .chunks_exact(4)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
-        .collect())
+    Ok(raw.as_chunks::<4>().0.to_vec())
 }
 
 pub fn edge_stencil_4x4(
@@ -167,10 +164,7 @@ pub fn gt_tonemap_rgba8(hdr_rgba: &[[f32; 4]], exposure: f32) -> Result<Vec<[u8;
     if written != hdr_rgba.len() {
         return Err(PerfError::OutputRejected);
     }
-    Ok(raw
-        .chunks_exact(4)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
-        .collect())
+    Ok(raw.as_chunks::<4>().0.to_vec())
 }
 
 pub fn kawase_blur_rgba32f(
@@ -200,8 +194,5 @@ pub fn kawase_blur_rgba32f(
     if written != src_rgba.len() {
         return Err(PerfError::OutputRejected);
     }
-    Ok(raw
-        .chunks_exact(4)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
-        .collect())
+    Ok(raw.as_chunks::<4>().0.to_vec())
 }

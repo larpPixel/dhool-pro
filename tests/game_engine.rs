@@ -11,7 +11,8 @@ fn game_engine_runs_world_assets_renderer_and_profiler() {
         native_width: 96,
         native_height: 64,
         ..ProjectSettings::default()
-    });
+    })
+    .expect("valid settings");
     let import_report = engine.load_demo_project();
     engine.set_render_config(RenderConfig::tiny_test());
 

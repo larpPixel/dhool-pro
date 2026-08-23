@@ -761,14 +761,12 @@ fn aaa_practical_lights_are_shadowed_spots() {
 }
 
 #[test]
-fn live_rain_path_uses_generated_detail_atlas_not_flat_overlay_assets() {
+fn live_rain_path_generates_its_detail_atlas_without_project_assets() {
     let gpu = include_str!("../src/gpu.rs");
     let rain_shader = include_str!("../src/shaders/rain3d.wgsl");
 
-    assert!(std::path::Path::new("assets/aaa/rain/generated_streak_detail.png").is_file());
-    assert!(!std::path::Path::new("assets/aaa/rain/rain_overlay.png").exists());
-    assert!(!std::path::Path::new("assets/aaa/rain/ripples_0003.png").exists());
-    assert!(gpu.contains("GENERATED_RAIN_STREAK_DETAIL"));
+    assert!(gpu.contains("fn generated_rain_streak_detail"));
+    assert!(!gpu.contains("assets/aaa/rain"));
     assert!(gpu.contains("rain-streak-detail"));
     assert!(rain_shader.contains("var rain_streak_detail: texture_2d<f32>"));
     assert!(rain_shader.contains("fn generated_streak_detail"));

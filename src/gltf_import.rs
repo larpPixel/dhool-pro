@@ -157,10 +157,7 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<(Vec<Material>, Vec<Mesh>),
                     count: flat_indices.len(),
                 });
             }
-            let indices = flat_indices
-                .chunks_exact(3)
-                .map(|triangle| [triangle[0], triangle[1], triangle[2]])
-                .collect();
+            let indices = flat_indices.as_chunks::<3>().0.to_vec();
             let material_index = primitive.material().index().unwrap_or(0);
             let reflective = materials
                 .get(material_index)
@@ -479,10 +476,7 @@ fn compact_indexed_geometry(
         }
         compact_indices.push(compact_index);
     }
-    let indices = compact_indices
-        .chunks_exact(3)
-        .map(|triangle| [triangle[0], triangle[1], triangle[2]])
-        .collect();
+    let indices = compact_indices.as_chunks::<3>().0.to_vec();
     Ok((vertices, indices))
 }
 
@@ -654,12 +648,16 @@ fn texture_from_gltf(image: &gltf::image::Data) -> Result<TextureImage, GltfImpo
     let pixels = match image.format {
         Format::R8G8B8 => image
             .pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|pixel| Color::rgb(byte(pixel[0]), byte(pixel[1]), byte(pixel[2])))
             .collect(),
         Format::R8G8B8A8 => image
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| {
                 Color::new(
                     byte(pixel[0]),
