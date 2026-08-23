@@ -498,8 +498,13 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         Format::D32,
         ResourceKind::HardwareDepth,
     ));
+    let environment_radiance = graph.add_resource(ResourceDesc::new(
+        "scene-environment-radiance-rgba16f",
+        Format::Rgba16,
+        ResourceKind::Lighting,
+    ));
     let lighting = graph.add_resource(ResourceDesc::new(
-        "albedo-free-lighting-rgba16",
+        "hdr-lighting-rgba16f",
         Format::Rgba16,
         ResourceKind::Lighting,
     ));
@@ -736,6 +741,7 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         .read(local_shadows)
         .read(ssr)
         .read(resolved_motion)
+        .read(environment_radiance)
         .history(rt_history)
         .write(software_rt)
         .target_format(Format::Rgba16)
@@ -750,6 +756,7 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
             1.0,
         )
         .read(depth_copy)
+        .read(environment_radiance)
         .write(volumetric_fog)
         .target_format(Format::Rgba16)
         .attachment(volumetric_fog, LoadOp::Clear, StoreOp::Store),
@@ -783,6 +790,7 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         .read(local_shadows)
         .read(ssr)
         .read(software_rt)
+        .read(environment_radiance)
         .write(lighting)
         .target_format(Format::Rgba16),
     );
@@ -815,6 +823,22 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         )
         .read(lighting)
         .write(exposure_white_balance)
+        .target_format(Format::Rgba16),
+    );
+
+    graph.add_pass(
+        RenderPassDesc::new(
+            "world-space-depth-tested-rain",
+            "weather",
+            FeatureCategory::Volumetrics,
+            0.45,
+        )
+        .read(resolved_depth)
+        .read(directional_shadow)
+        .read(local_shadows)
+        .read(environment_radiance)
+        .read(lighting)
+        .write(lighting)
         .target_format(Format::Rgba16),
     );
 

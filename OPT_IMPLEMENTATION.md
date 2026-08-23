@@ -45,17 +45,17 @@ Status definitions:
 | Hardware stencil-volume local lighting | Live | Main depth is D32S8. Instanced local-light bounds run a z-fail front/back increment/decrement volume pass, and the additive local-light resolve is rejected outside nonzero stencil. Directional/ambient lighting remains a single full-screen pass. |
 | Noiseless shadow projection plus contact detail | Live + Reference | Cached raster shadow maps are combined with material/depth-aware screen-space contact visibility without a noisy temporal dependency. |
 | AO/bent-normal/specular occlusion | Live + Reference | Live lighting derives stable screen-space/contact visibility from resolved D32, normals and material data; material cavity and bent-normal contracts feed specular occlusion. CPU debug views expose the individual terms. |
-| Energy-normalized diffuse and scene-owned environment profiles | Live + Reference | CPU and GPU Burley diffuse use the same `1/pi` convention and restrained sky-hemisphere fill. Sky orientation/exposure, precipitation, wetness, wind, and exposure defaults live on `RenderScene`, so dry Dust2 and rainy monsoon rendering do not depend on hard-coded global shader weather. |
+| Energy-normalized diffuse and scene-owned environment lighting | Live + Reference + Contract | CPU and GPU Burley diffuse use the same `1/pi` convention. A required 2:1 `EnvironmentMap` supplies visible radiance, yaw/exposure, SH9 diffuse irradiance, reflection mips, fog/rain fill, and white-balance illuminant. The asset pipeline rejects empty or malformed panoramas; weather and exposure limits remain separate scene data. |
 | Probe/RSM world-space GI | Reference / architecture only | The CPU renderer has probe-like indirect response and the graph no longer pretends a separate live GPU probe pass exists. A live RSM/probe streaming system is not implemented. |
 
 ## Reflections, atmosphere, and post
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| SSR first, software world-space tracing second, sky/proxy fallback last | Live | Half-resolution SSR precedes 70% software reflection supplementation and proxy/sky fallback. |
+| SSR first, software world-space tracing second, environment/proxy fallback last | Live | Half-resolution SSR precedes 70% software reflection supplementation. Misses sample the same scene panorama with a roughness-selected mip; there is no flat-color or analytic-moon reflection fallback. |
 | Two-frame reflection history with rejection | Live | Reflection history ping-pongs and rejects by motion, depth, and roughness. |
 | Warn when SSR is slower than software tracing | Reference + live measurement | The production gate evaluates CPU-reference reports. `--profile-gpu` now emits real GPU stage timestamps; individual SSR/software queries remain a finer-grained future split. |
-| Half-resolution blue-noise fog | Live + Reference | Compute fog runs at half resolution and is bilinearly merged during tone mapping. |
+| Half-resolution blue-noise fog | Live + Reference | Compute fog runs at half resolution and is bilinearly merged during tone mapping. Both paths reconstruct the view ray and sample scene environment radiance instead of using a global flat sky. |
 | Depth-tested world-space rain and reactive wetness | Live | Instanced rain prisms use resolved reverse-Z depth and shared light/shadow/weather data. Wet materials, impacts, and reflections use the same field. |
 | Diffuse-only exposure, bounded white balance, artist compensation, temporal adaptation | Live | Ping-pong 1x1 exposure history uses diffuse illuminance from HDR alpha, artist min/max/EV/balance controls, separate brighten/darken rates, and measured frame rate. |
 | GT toe/linear/shoulder mapping and post-lighting bloom after velocity compensation | Live + Reference | Bloom extracts only energy above a soft HDR threshold, caps extreme source luminance, and uses a compact bilinear Gaussian kernel. This keeps thin practical lights smooth without turning them into broad colored blobs; the deterministic reference retains its small C++ Kawase kernel. The GT resolve merges bloom at restrained intensity with fog, exposure, white balance, and camera effects. |
@@ -79,7 +79,7 @@ Status definitions:
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Named resources/passes with formats, scales, samples, dependencies, histories, and budgets | Contract | `RenderGraph` models these fields, including multisample count, and architecture tests validate the real live order. |
+| Named resources/passes with formats, scales, samples, dependencies, histories, and budgets | Contract | `RenderGraph` models these fields, including the scene environment input to reflections, fog, lighting, and depth-tested rain. Architecture tests validate the declared live order. |
 | GPU timing | Live | `--profile-gpu` enables adapter timestamp features, brackets six renderer stages, reads results back, and prints milliseconds. Unsupported adapters return an explicit error. |
 | Debug views for depth, normals, material IDs, motion, shadows, AO, reflections, coverage, overdraw, topology, light volumes, and history | Reference + Contract | `DebugView::ALL`, required-view gates, gallery output, and renderer tests cover the declared set. Live capture verifies final presentation; a live interactive G-buffer selector is not claimed. |
 | Artist controls | Live + Contract | Exposure bounds/EV, white-balance strength, velocity strength/cutoff, display gamma, and brightness are CLI-exposed. Import reports expose texture/topology/shadow/prepass budgets. |

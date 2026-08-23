@@ -9,7 +9,6 @@ use crate::scene::{LightKind, MaterialClass, RenderScene};
 use std::time::Instant;
 
 const INV_PI: f32 = std::f32::consts::FRAC_1_PI;
-const SKY_HEMISPHERE_SCALE: f32 = 0.24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DebugView {
@@ -878,8 +877,7 @@ impl CpuRenderer {
                     / 255.0;
                 let view_ray = (g.world - scene.camera.position).normalize_or_zero();
                 let reflected = reflect(view_ray, g.normal).normalize_or_zero();
-                let sky_factor = 0.24 + reflected.y.max(0.0) * 0.18 + noise * 0.04;
-                let sky = scene.sky_color * sky_factor;
+                let sky = Color::from_vec3(scene.environment_radiance(reflected), 1.0);
                 let emissive = scene
                     .materials
                     .iter()
@@ -915,8 +913,16 @@ impl CpuRenderer {
         for idx in 0..buffers.gbuffer.len() {
             let g = buffers.gbuffer[idx];
             if !g.covered {
-                buffers.lighting[idx] =
-                    [scene.sky_color.r, scene.sky_color.g, scene.sky_color.b, 1.0];
+                let x = idx as u32 % self.config.width;
+                let y = idx as u32 / self.config.width;
+                let sky = scene.environment_radiance(camera_ray(
+                    scene,
+                    x,
+                    y,
+                    self.config.width,
+                    self.config.height,
+                ));
+                buffers.lighting[idx] = [sky.x, sky.y, sky.z, 0.18_f32.min(sky_luminance(sky))];
                 continue;
             }
             let material = &scene.materials[g.material_index];
@@ -1017,7 +1023,13 @@ impl CpuRenderer {
                     / 255.0;
                 let distance_depth = 1.0 - depth;
                 let fog = saturate(distance_depth * distance_depth * 0.45 + noise * 0.015);
-                let fog_rgb = scene.sky_color.to_vec3() * 0.75;
+                let fog_rgb = scene.environment_radiance(camera_ray(
+                    scene,
+                    x,
+                    y,
+                    self.config.width,
+                    self.config.height,
+                ));
                 buffers.lighting[idx][0] = buffers.lighting[idx][0] * (1.0 - fog) + fog_rgb.x * fog;
                 buffers.lighting[idx][1] = buffers.lighting[idx][1] * (1.0 - fog) + fog_rgb.y * fog;
                 buffers.lighting[idx][2] = buffers.lighting[idx][2] * (1.0 - fog) + fog_rgb.z * fog;
@@ -1285,10 +1297,23 @@ fn burley_diffuse(normal: Vec3, view: Vec3, light: Vec3, roughness: f32) -> f32 
 }
 
 fn indirect_diffuse_irradiance(scene: &RenderScene, normal: Vec3) -> Vec3 {
-    let up = normal.y.max(0.0);
-    let ambient = scene.ambient_color.to_vec3() * (0.6 + 0.4 * up);
-    let sky = scene.sky_color.to_vec3() * (0.18 + up * 0.82) * SKY_HEMISPHERE_SCALE;
-    ambient + sky
+    scene.environment_irradiance(normal)
+}
+
+fn camera_ray(scene: &RenderScene, x: u32, y: u32, width: u32, height: u32) -> Vec3 {
+    let forward = (scene.camera.target - scene.camera.position).normalize_or_zero();
+    let right = forward.cross(scene.camera.up).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    let aspect = width as f32 / height.max(1) as f32;
+    let tan_half_fov = (scene.camera.vertical_fov_radians * 0.5).tan();
+    let ndc_x = ((x as f32 + 0.5) / width.max(1) as f32) * 2.0 - 1.0;
+    let ndc_y = 1.0 - ((y as f32 + 0.5) / height.max(1) as f32) * 2.0;
+    (forward + right * (ndc_x * aspect * tan_half_fov) + up * (ndc_y * tan_half_fov))
+        .normalize_or_zero()
+}
+
+fn sky_luminance(color: Vec3) -> f32 {
+    color.x * 0.2126 + color.y * 0.7152 + color.z * 0.0722
 }
 
 fn specular_occlusion(ndotv: f32, ao: f32, roughness: f32) -> f32 {

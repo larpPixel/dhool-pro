@@ -26,6 +26,23 @@ The downloaded glTF models retain their base-color, tangent-space normal, and pa
 ambient-occlusion/roughness/metallic textures. The files are vendored under
 `assets/aaa` so the scene is deterministic and works offline.
 
+## Monsoon Cloud Environment
+
+- Asset: Kloppenheim 07 (Pure Sky)
+- Asset page: https://polyhaven.com/a/kloppenheim_07_puresky
+- Downloaded file: https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/kloppenheim_07_puresky_2k.hdr
+- License: CC0 1.0 Universal (https://polyhaven.com/license)
+- Authors credited upstream: Greg Zaal, with pure-sky edits by Jarod Guest
+- Vendored file: `assets/aaa/environment/kloppenheim_07_puresky_2k.hdr`
+- SHA-256: `e06e7f63d48dbe86a5f5a7f987920fa87fd1bfc9de017ce74ce91617b33161c1`
+- Refresh command: `scripts/fetch_aaa_assets.sh`
+
+The checked-in 2048x1024 Radiance HDR retains linear values above display white.
+It is not a decorative backdrop: both renderers use it for the visible cloud
+sky, diffuse irradiance, reflection fallback, atmosphere, and exposure color.
+The download script resolves the official file through Poly Haven's API and
+prints checksums for the complete vendored bundle.
+
 ## Local CS2 Dust2 Import
 
 The optional `--map dust2` scene consumes a local, git-ignored export from the
@@ -43,8 +60,9 @@ user's licensed Counter-Strike 2 install:
 The generated CS2-derived output is intentionally ignored by git and is not
 redistributed by this project. The runtime Dust2 loader uses the visual GLB,
 loads exported albedo textures at a capped in-memory resolution, filters Source
-2 tool/clip meshes, binds the converted Dust2 panorama as its live sky when
-present, and keeps the old physics export only as a fallback. The procedural
+2 tool/clip meshes, requires the converted Dust2 panorama as the shared visible
+and lighting environment, and keeps the old physics export only as a fallback.
+The procedural
 Dust2 cloth awning is generated from engine geometry and uses no external asset.
 
 ## Generated City Decals

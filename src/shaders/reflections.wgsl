@@ -17,6 +17,7 @@ struct Lights {
     sky: vec4<f32>,
     weather: vec4<f32>,
     environment: vec4<f32>,
+    environment_sh: array<vec4<f32>, 9>,
     local_position_radius: array<vec4<f32>, 6>,
     local_color_intensity: array<vec4<f32>, 6>,
     local_direction_outer: array<vec4<f32>, 6>,
@@ -43,6 +44,11 @@ struct ReflectionProxies {
 @group(0) @binding(9) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(10) var<uniform> reflection_proxies: ReflectionProxies;
 @group(0) @binding(11) var half_resolution_ssr: texture_2d<f32>;
+@group(0) @binding(12) var skybox: texture_2d<f32>;
+@group(0) @binding(13) var skybox_sampler: sampler;
+
+const INV_PI: f32 = 0.31830988618;
+const INV_TAU: f32 = 0.15915494309;
 
 const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-18.5, 0.18, -82.0);
 const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(37.0, 13.5, 100.0);
@@ -71,6 +77,18 @@ fn reconstruct_world_position(uv: vec2<f32>, scene_depth: f32) -> vec3<f32> {
     let clip_position = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, scene_depth, 1.0);
     let world_h = camera.inverse_view_projection * clip_position;
     return world_h.xyz / max(world_h.w, 0.00001);
+}
+
+fn environment_radiance(direction: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let ray = safe_normalize(direction);
+    let panorama_uv = vec2<f32>(
+        fract(0.5 + (atan2(ray.z, ray.x) + lights.environment.y) * INV_TAU),
+        clamp(0.5 - asin(clamp(ray.y, -1.0, 1.0)) * INV_PI, 0.0, 1.0)
+    );
+    let max_lod = f32(textureNumLevels(skybox) - 1u);
+    let lod = roughness * roughness * max_lod;
+    return textureSampleLevel(skybox, skybox_sampler, panorama_uv, lod).rgb
+        * exp2(lights.environment.x);
 }
 
 fn hash21(value: vec2<f32>) -> f32 {
@@ -267,13 +285,7 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
     let noise_b = hash_blue_noise(invocation.yx + vec2<u32>(13u, 29u), frame.counters.x + 71u) - 0.5;
     let rough_jitter = effective_roughness * effective_roughness * 0.22;
     let reflected = safe_normalize(reflected_base + (tangent * noise_a + bitangent * noise_b) * rough_jitter);
-    let sky_mix = clamp(reflected.y * 0.5 + 0.5, 0.0, 1.0);
-    let sky = mix(lights.sky.rgb * 0.35, lights.sky.rgb * 2.0 + lights.ambient.rgb * 0.5, sky_mix);
-    let moon_direction = safe_normalize(lights.directional_direction_count.xyz);
-    let moon = pow(max(dot(reflected, moon_direction), 0.0), 256.0)
-        * lights.directional_color_intensity.rgb
-        * lights.directional_color_intensity.w
-        * 0.85;
+    let sky = environment_radiance(reflected, effective_roughness);
     var local_reflection = vec3<f32>(0.0);
     let wet_puddle = max(smoothstep(0.06, 0.64, wetness), glass_mask);
     let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
@@ -329,7 +341,7 @@ fn cs_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         1.24
     );
     let traced_reflection = mix(proxy_reflection, ssr_reflection, ssr_hit);
-    let exterior_reflection = (sky * 0.62 + moon + local_reflection * 1.46 + traced_reflection * 1.34) * response;
+    let exterior_reflection = (sky * 0.78 + local_reflection * 1.46 + traced_reflection * 1.34) * response;
     let interior_line = f32(source_pixel.x & 1u);
     let underlayer_reflection =
         transparent_underlay(world_position) * (0.22 + wet_puddle * 0.28)

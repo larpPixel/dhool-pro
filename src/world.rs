@@ -1,7 +1,9 @@
 use crate::asset::ShadowCasterClass;
 use crate::cloth::{ClothColliderSnapshot, ClothDefinition, ClothError, ClothState};
 use crate::math::{Color, Mat4, Vec3};
-use crate::scene::{Camera, EnvironmentProfile, Light, LightKind, Material, Mesh, RenderScene};
+use crate::scene::{
+    Camera, EnvironmentMap, EnvironmentProfile, Light, LightKind, Material, Mesh, RenderScene,
+};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
@@ -143,8 +145,8 @@ pub struct World {
     colliders: HashMap<EntityId, Collider>,
     scripts: HashMap<EntityId, ScriptState>,
     pub materials: Vec<Material>,
-    pub sky_color: Color,
     pub ambient_color: Color,
+    pub environment_map: EnvironmentMap,
     pub environment: EnvironmentProfile,
     tick: u64,
 }
@@ -164,8 +166,8 @@ impl Default for World {
             colliders: HashMap::new(),
             scripts: HashMap::new(),
             materials: Vec::new(),
-            sky_color: Color::rgb(0.08, 0.12, 0.18),
             ambient_color: Color::rgb(0.035, 0.045, 0.055),
+            environment_map: EnvironmentMap::solid(Color::rgb(0.08, 0.12, 0.18)),
             environment: EnvironmentProfile::rainy(),
             tick: 0,
         }
@@ -497,8 +499,8 @@ impl World {
             materials: self.materials.clone(),
             meshes,
             lights,
-            sky_color: self.sky_color,
             ambient_color: self.ambient_color,
+            environment_map: self.environment_map.clone(),
             environment: self.environment,
         }
     }
@@ -511,8 +513,8 @@ impl World {
             cameras,
             lights: light_components,
             materials,
-            sky_color,
             ambient_color,
+            environment_map,
             environment,
             ..
         } = self;
@@ -599,8 +601,8 @@ impl World {
             materials,
             meshes,
             lights,
-            sky_color,
             ambient_color,
+            environment_map,
             environment,
         }
     }
@@ -608,8 +610,8 @@ impl World {
     pub fn from_render_scene(scene: RenderScene) -> Self {
         let mut world = Self {
             materials: scene.materials,
-            sky_color: scene.sky_color,
             ambient_color: scene.ambient_color,
+            environment_map: scene.environment_map,
             environment: scene.environment,
             ..Self::default()
         };

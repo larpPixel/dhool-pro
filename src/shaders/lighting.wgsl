@@ -12,6 +12,7 @@ struct Lights {
     sky: vec4<f32>,
     weather: vec4<f32>,
     environment: vec4<f32>,
+    environment_sh: array<vec4<f32>, 9>,
     local_position_radius: array<vec4<f32>, 6>,
     local_color_intensity: array<vec4<f32>, 6>,
     local_direction_outer: array<vec4<f32>, 6>,
@@ -50,7 +51,6 @@ const EMISSIVE_SCALE: f32 = 12.0;
 const PRACTICAL_SPOT_MIN_FILL: f32 = 0.26;
 const PRACTICAL_SPOT_MIN_SHADOW: f32 = 0.24;
 const INV_PI: f32 = 0.31830988618;
-const SKY_HEMISPHERE_SCALE: f32 = 0.24;
 const INV_TAU: f32 = 0.15915494309;
 
 
@@ -173,27 +173,12 @@ fn reconstruct_world_position(uv: vec2<f32>, scene_depth: f32) -> vec3<f32> {
 fn sky_radiance(uv: vec2<f32>) -> vec3<f32> {
     let far_world = reconstruct_world_position(uv, 0.0);
     let ray = safe_normalize(far_world - camera.position_time.xyz);
-    let moon_direction = safe_normalize(lights.directional_direction_count.xyz);
-    let moon_alignment = max(dot(ray, moon_direction), 0.0);
-    let moon = pow(moon_alignment, 720.0)
-        * lights.directional_color_intensity.rgb
-        * lights.directional_color_intensity.w
-        * 0.95;
-
-    let skybox_size = textureDimensions(skybox);
-    if skybox_size.x > 1u || skybox_size.y > 1u {
-        let panorama_uv = vec2<f32>(
-            fract(0.5 + atan2(ray.z, ray.x) * INV_TAU + lights.environment.y),
-            clamp(0.5 - asin(clamp(ray.y, -1.0, 1.0)) * INV_PI, 0.0, 1.0)
-        );
-        let source_sky = textureSample(skybox, skybox_sampler, panorama_uv).rgb
-            * exp2(lights.environment.x);
-        return source_sky + moon * 0.10;
-    }
-
-    let horizon = pow(clamp(ray.y * 0.5 + 0.5, 0.0, 1.0), 1.7);
-    let sky = mix(lights.sky.rgb * 0.35, lights.sky.rgb * 2.4 + lights.ambient.rgb * 0.6, horizon);
-    return sky + moon;
+    let panorama_uv = vec2<f32>(
+        fract(0.5 + (atan2(ray.z, ray.x) + lights.environment.y) * INV_TAU),
+        clamp(0.5 - asin(clamp(ray.y, -1.0, 1.0)) * INV_PI, 0.0, 1.0)
+    );
+    return textureSample(skybox, skybox_sampler, panorama_uv).rgb
+        * exp2(lights.environment.x);
 }
 
 fn procedural_rain_impacts(world_position: vec3<f32>, normal: vec3<f32>, surface: vec4<f32>, time: f32) -> f32 {
@@ -522,10 +507,26 @@ fn shade_light(
     return (diffuse + specular + transmission) * radiance;
 }
 
-fn sky_hemisphere_irradiance(normal: vec3<f32>) -> vec3<f32> {
-    let up = max(normal.y, 0.0);
-    let sky_weight = 0.18 + up * 0.82;
-    return lights.sky.rgb * sky_weight * SKY_HEMISPHERE_SCALE;
+fn environment_irradiance(normal: vec3<f32>) -> vec3<f32> {
+    let x = normal.x;
+    let y = normal.y;
+    let z = normal.z;
+    let basis = array<f32, 9>(
+        0.282095,
+        0.488603 * z,
+        0.488603 * y,
+        0.488603 * x,
+        1.092548 * x * z,
+        1.092548 * z * y,
+        0.315392 * (3.0 * y * y - 1.0),
+        1.092548 * x * y,
+        0.546274 * (x * x - z * z)
+    );
+    var irradiance = vec3<f32>(0.0);
+    for (var index = 0u; index < 9u; index += 1u) {
+        irradiance += lights.environment_sh[index].rgb * basis[index];
+    }
+    return max(irradiance, vec3<f32>(0.0));
 }
 
 
@@ -551,7 +552,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let scene_depth = textureLoad(depth, vec2<i32>(pixel), 0);
     if scene_depth <= 0.00001 {
         let sky = sky_radiance(input.uv);
-        return vec4<f32>(sky, max(luminance(sky), 0.0001));
+        return vec4<f32>(sky, clamp(luminance(sky), 0.0001, 0.18));
     }
 
     let surface_raw = textureLoad(pbr, vec2<i32>(pixel), 0);
@@ -591,7 +592,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let contact_visibility = mix(ssao, 1.0, 0.16);
     let indirect_irradiance =
         lights.ambient.rgb * (0.18 + max(normal.y, 0.0) * 0.30)
-        + sky_hemisphere_irradiance(normal);
+        + environment_irradiance(normal);
     let ambient = indirect_irradiance * INV_PI;
     let sun_shadow = shadow_visibility(world_position, normal, light_direction);
     let transparent_diffuse_weight = mix(1.0, 0.24 + opacity * 0.18, glass_mask);
@@ -641,8 +642,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         * rain_light_mask
         * (0.10 + wetness * 0.18);
     hdr += impact_light;
-    let fog = smoothstep(0.86, 1.0, 1.0 - scene_depth);
-    hdr = mix(hdr, vec3<f32>(0.030, 0.052, 0.075), fog * 0.10);
     let vignette_distance = distance(input.uv, vec2<f32>(0.5));
     let vignette = 1.0 - smoothstep(0.42, 0.78, vignette_distance) * 0.42;
     return vec4<f32>(max(hdr * vignette, vec3<f32>(0.0)), diffuse_illuminance);

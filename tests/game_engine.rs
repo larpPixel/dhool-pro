@@ -119,6 +119,7 @@ fn scene_cloth_uses_the_shared_fixed_step_and_preserves_pins() {
 #[test]
 fn world_round_trip_composes_existing_mesh_transforms() {
     let scene = build_demo_scene();
+    let expected_environment = scene.environment_map.clone();
     let expected = scene
         .meshes
         .iter()
@@ -134,6 +135,27 @@ fn world_round_trip_composes_existing_mesh_transforms() {
         .transform;
 
     assert_eq!(actual, expected);
+    assert_eq!(rebuilt.environment_map, expected_environment);
+}
+
+#[test]
+fn asset_pipeline_rejects_non_equirectangular_environment() {
+    let mut scene = build_demo_scene();
+    scene.environment_map = dhool_pro::EnvironmentMap::from_image(
+        dhool_pro::TextureImage {
+            width: 4,
+            height: 4,
+            pixels: vec![dhool_pro::math::Color::WHITE; 16],
+        },
+        dhool_pro::EnvironmentEncoding::Srgb,
+        0.0,
+        0.0,
+    );
+
+    let (_pipeline, report) = AssetPipeline::build_from_scene(&scene, dhool_pro::QualityTier::High);
+    assert!(report
+        .errors()
+        .any(|message| message.text.contains("must be 2:1 equirectangular")));
 }
 
 #[test]

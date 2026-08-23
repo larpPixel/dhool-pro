@@ -29,6 +29,7 @@ fn baseline_frame_graph_obeys_spec_constraints() {
         "2x-msaa-gbuffer-custom-coverage-resolve",
         "local-light-z-fail-stencil-volumes",
         "stencil-restricted-local-lighting",
+        "world-space-depth-tested-rain",
         "single-direction-depth-aware-velocity-compensation",
         "diffuse-gaussian-bloom-chain",
         "smaa-t2x-motion-vector-resolve",
@@ -40,6 +41,9 @@ fn baseline_frame_graph_obeys_spec_constraints() {
     assert!(graph
         .resources()
         .any(|resource| resource.name == "2x-msaa-hardware-depth" && resource.sample_count == 2));
+    assert!(graph
+        .resources()
+        .any(|resource| resource.name == "scene-environment-radiance-rgba16f"));
     assert!(!pass_names.contains(&"half-resolution-camera-composite-effects"));
     assert!(!graph
         .resources()
@@ -55,6 +59,20 @@ fn live_shader_contract_contains_real_coverage_stencil_and_history_paths() {
     let lighting = include_str!("../src/shaders/lighting.wgsl");
     assert!(lighting.contains("fs_local_lights"));
     assert!(lighting.contains("material_profiles"));
+    assert!(lighting.contains("fn environment_irradiance"));
+    assert!(lighting.contains("var skybox: texture_2d<f32>"));
+
+    let reflections = include_str!("../src/shaders/reflections.wgsl");
+    assert!(reflections.contains("fn environment_radiance"));
+    assert!(reflections.contains("textureSampleLevel(skybox"));
+
+    let fog = include_str!("../src/shaders/volumetric_fog.wgsl");
+    assert!(fog.contains("fn environment_radiance"));
+    assert!(fog.contains("textureSampleLevel(skybox"));
+
+    let rain = include_str!("../src/shaders/rain3d.wgsl");
+    assert!(rain.contains("fn environment_radiance"));
+    assert!(rain.contains("directional_fill"));
 
     let aa = include_str!("../src/shaders/aa.wgsl");
     assert!(aa.contains("spatial_resolve"));
@@ -63,6 +81,33 @@ fn live_shader_contract_contains_real_coverage_stencil_and_history_paths() {
     let presentation = include_str!("../src/shaders/present.wgsl");
     assert!(presentation.contains("display_gamma"));
     assert!(presentation.contains("ui_overlay"));
+}
+
+#[test]
+fn every_wgsl_shader_parses_and_validates() {
+    let shader_directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shaders");
+    let mut shader_paths = std::fs::read_dir(&shader_directory)
+        .expect("shader directory")
+        .map(|entry| entry.expect("shader directory entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "wgsl")
+        })
+        .collect::<Vec<_>>();
+    shader_paths.sort();
+    assert!(!shader_paths.is_empty());
+
+    for path in shader_paths {
+        let source = std::fs::read_to_string(&path).expect("WGSL source");
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|error| panic!("{} failed to parse: {error}", path.display()));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|error| panic!("{} failed validation: {error}", path.display()));
+    }
 }
 
 #[test]

@@ -1,11 +1,12 @@
 use crate::cloth::{ClothColliderSnapshot, ClothState};
 use crate::math::{Vec3, Vec4};
 use crate::scene::{
-    build_aaa_scene, build_asset_showcase, build_dust2_scene, LightKind, Material, RenderScene,
-    TextureImage,
+    build_aaa_scene, build_asset_showcase, build_dust2_scene, EnvironmentMap, LightKind, Material,
+    RenderScene, TextureImage,
 };
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3 as GpuVec3};
+use half::f16;
 use std::fmt;
 use std::fs;
 use std::ops::Range;
@@ -42,7 +43,6 @@ const CAMERA_FAST_MULTIPLIER: f32 = 3.5;
 const CAMERA_LOOK_SPEED: f32 = 1.55;
 const CAMERA_MOUSE_LOOK_SPEED: f32 = 0.0025;
 const GENERATED_RAIN_STREAK_DETAIL: &str = "assets/aaa/rain/generated_streak_detail.png";
-const DUST2_SKYBOX_TEXTURE: &str = "assets/dust2/generated/cs2/materials/skybox/sky_de_dust2.png";
 // Keep the expanded Dust II precipitation volume at the original rain density.
 const RAIN_DROP_COUNT: u32 = 32_768;
 const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
@@ -523,6 +523,7 @@ struct LightUniform {
     sky: [f32; 4],
     weather: [f32; 4],
     environment: [f32; 4],
+    environment_sh: [[f32; 4]; 9],
     local_position_radius: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
     local_color_intensity: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
     local_direction_outer: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
@@ -540,6 +541,10 @@ struct ReflectionProxyUniform {
 
 impl LightUniform {
     fn from_scene(scene: &RenderScene) -> Self {
+        let sky_irradiance = scene
+            .environment_map
+            .diffuse_irradiance(crate::math::Vec3::Y)
+            * std::f32::consts::FRAC_1_PI;
         let mut uniform = Self {
             ambient: [
                 scene.ambient_color.r,
@@ -547,7 +552,7 @@ impl LightUniform {
                 scene.ambient_color.b,
                 1.0,
             ],
-            sky: [scene.sky_color.r, scene.sky_color.g, scene.sky_color.b, 1.0],
+            sky: [sky_irradiance.x, sky_irradiance.y, sky_irradiance.z, 1.0],
             weather: [
                 scene.environment.precipitation,
                 scene.environment.surface_wetness,
@@ -555,11 +560,13 @@ impl LightUniform {
                 0.0,
             ],
             environment: [
-                scene.environment.sky_exposure_ev,
-                scene.environment.sky_yaw_radians,
-                0.0,
+                scene.environment_map.exposure_ev(),
+                scene.environment_map.yaw_radians(),
+                1.0,
                 0.0,
             ],
+            environment_sh: (*scene.environment_map.irradiance_sh())
+                .map(|coefficient| [coefficient[0], coefficient[1], coefficient[2], 0.0]),
             ..Self::zeroed()
         };
         let mut local_count = 0_usize;
@@ -647,21 +654,6 @@ impl LightUniform {
         )
         .normalize_or_zero()
     }
-}
-
-fn live_skybox_texture_for_map(
-    map: Option<&str>,
-    scene: &RenderScene,
-) -> Result<TextureImage, LiveError> {
-    if map == Some("dust2") {
-        let path = PathBuf::from(DUST2_SKYBOX_TEXTURE);
-        if path.is_file() {
-            return TextureImage::from_path(&path)
-                .map_err(|message| LiveError::Scene(format!("{}: {message}", path.display())));
-        }
-    }
-
-    Ok(solid_texture(scene.sky_color))
 }
 
 #[repr(C)]
@@ -778,6 +770,8 @@ struct RainPassResources<'a> {
     shadow_view: &'a wgpu::TextureView,
     shadow_sampler: &'a wgpu::Sampler,
     shadow_camera_buffer: &'a wgpu::Buffer,
+    skybox_view: &'a wgpu::TextureView,
+    skybox_sampler: &'a wgpu::Sampler,
 }
 
 struct GBuffer {
@@ -813,9 +807,6 @@ struct GBuffer {
     _aa_history_b: wgpu::Texture,
     _aa_presented: wgpu::Texture,
     _ui_overlay: wgpu::Texture,
-    _skybox_texture: wgpu::Texture,
-    _skybox_view: wgpu::TextureView,
-    _skybox_sampler: wgpu::Sampler,
     albedo: wgpu::TextureView,
     normal: wgpu::TextureView,
     pbr: wgpu::TextureView,
@@ -976,7 +967,9 @@ struct GpuRenderer {
     mouse_look: bool,
     base_light_uniform: LightUniform,
     local_light_count: u32,
-    skybox_texture: TextureImage,
+    _environment_texture: wgpu::Texture,
+    environment_view: wgpu::TextureView,
+    environment_sampler: wgpu::Sampler,
     display_fps: f32,
     show_ui: bool,
     frame_capture: Option<FrameCapture>,
@@ -1195,7 +1188,22 @@ impl GpuRenderer {
         let light_uniform = LightUniform::from_scene(&scene);
         let local_light_count = light_uniform.directional_direction_count[3]
             .clamp(0.0, MAX_GPU_POINT_LIGHTS as f32) as u32;
-        let skybox_texture = live_skybox_texture_for_map(map.as_deref(), &scene)?;
+        let environment_map = scene.environment_map.clone();
+        let (environment_texture, environment_view) = upload_environment_texture(
+            &device,
+            &queue,
+            "lighting-skybox-panorama",
+            &environment_map,
+        );
+        let environment_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("lighting-skybox-linear-repeat"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
         let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene-light-uniform"),
             contents: bytemuck::bytes_of(&light_uniform),
@@ -1314,18 +1322,6 @@ impl GpuRenderer {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..wgpu::SamplerDescriptor::default()
         });
-        let rain_resources = RainPassResources {
-            camera_buffer: &camera_buffer,
-            streak_view: &rain_streak_view,
-            streak_sampler: &rain_streak_sampler,
-            light_buffer: &light_buffer,
-            shadow_view: &shadow_view,
-            shadow_sampler: &shadow_sampler,
-            shadow_camera_buffer: &shadow_camera_buffer,
-        };
-        let rain =
-            create_rain_resources(&device, &rain_layout, rain_resources, rain_streak_texture);
-
         let depth_pipeline = create_depth_pipeline(&device, &camera_layout);
         let shadow_pipeline = create_shadow_pipeline(&device, &camera_layout);
         let alpha_shadow_pipeline =
@@ -1368,7 +1364,6 @@ impl GpuRenderer {
         let present_pipeline = create_present_pipeline(&device, &present_layout, config.format);
         let gbuffer = GBuffer::new(
             &device,
-            &queue,
             config.width,
             config.height,
             config.format,
@@ -1404,7 +1399,24 @@ impl GpuRenderer {
             &reflection_proxy_buffer,
             &local_shadow_array_view,
             &local_shadow_buffer,
-            &skybox_texture,
+            &environment_view,
+            &environment_sampler,
+        );
+        let rain = create_rain_resources(
+            &device,
+            &rain_layout,
+            RainPassResources {
+                camera_buffer: &camera_buffer,
+                streak_view: &rain_streak_view,
+                streak_sampler: &rain_streak_sampler,
+                light_buffer: &light_buffer,
+                shadow_view: &shadow_view,
+                shadow_sampler: &shadow_sampler,
+                shadow_camera_buffer: &shadow_camera_buffer,
+                skybox_view: &environment_view,
+                skybox_sampler: &environment_sampler,
+            },
+            rain_streak_texture,
         );
 
         Ok(Self {
@@ -1504,7 +1516,9 @@ impl GpuRenderer {
             mouse_look: false,
             base_light_uniform: light_uniform,
             local_light_count,
-            skybox_texture,
+            _environment_texture: environment_texture,
+            environment_view,
+            environment_sampler,
             display_fps: 0.0,
             show_ui: capture_path.is_none(),
             frame_capture: capture_path.map(|path| FrameCapture {
@@ -1527,7 +1541,6 @@ impl GpuRenderer {
         self.surface.configure(&self.device, &self.config);
         self.gbuffer = GBuffer::new(
             &self.device,
-            &self.queue,
             size.width,
             size.height,
             self.config.format,
@@ -1563,7 +1576,8 @@ impl GpuRenderer {
             &self._reflection_proxy_buffer,
             &self.local_shadow_array_view,
             &self.local_shadow_buffer,
-            &self.skybox_texture,
+            &self.environment_view,
+            &self.environment_sampler,
         );
     }
 
@@ -2746,7 +2760,6 @@ impl GBuffer {
     #[allow(clippy::too_many_arguments)]
     fn new(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         width: u32,
         height: u32,
         surface_format: wgpu::TextureFormat,
@@ -2782,7 +2795,8 @@ impl GBuffer {
         reflection_proxy_buffer: &wgpu::Buffer,
         local_shadow_view: &wgpu::TextureView,
         local_shadow_buffer: &wgpu::Buffer,
-        skybox_texture: &TextureImage,
+        skybox_view: &wgpu::TextureView,
+        skybox_sampler: &wgpu::Sampler,
     ) -> Self {
         let (albedo_ms_texture, albedo_ms) = multisampled_render_texture(
             device,
@@ -2941,22 +2955,6 @@ impl GBuffer {
             height,
             UI_FORMAT,
         );
-        let (skybox_gpu_texture, skybox_view) = upload_material_texture(
-            device,
-            queue,
-            "lighting-skybox-panorama",
-            skybox_texture,
-            true,
-        );
-        let skybox_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("lighting-skybox-linear-repeat"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..wgpu::SamplerDescriptor::default()
-        });
         let reflection_width = ((width * 7) / 10).max(1);
         let reflection_height = ((height * 7) / 10).max(1);
         let reflection_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -3046,6 +3044,11 @@ impl GBuffer {
                     resource: reflection_proxy_buffer.as_entire_binding(),
                 },
                 texture_entry(11, &ssr),
+                texture_entry(12, skybox_view),
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::Sampler(skybox_sampler),
+                },
             ],
         });
         let reflection_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3076,6 +3079,11 @@ impl GBuffer {
                     resource: reflection_proxy_buffer.as_entire_binding(),
                 },
                 texture_entry(11, &ssr),
+                texture_entry(12, skybox_view),
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::Sampler(skybox_sampler),
+                },
             ],
         });
         let lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3109,10 +3117,10 @@ impl GBuffer {
                     binding: 11,
                     resource: local_shadow_buffer.as_entire_binding(),
                 },
-                texture_entry(12, &skybox_view),
+                texture_entry(12, skybox_view),
                 wgpu::BindGroupEntry {
                     binding: 13,
-                    resource: wgpu::BindingResource::Sampler(&skybox_sampler),
+                    resource: wgpu::BindingResource::Sampler(skybox_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 14,
@@ -3296,6 +3304,15 @@ impl GBuffer {
                     binding: 3,
                     resource: light_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                texture_entry(5, skybox_view),
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(skybox_sampler),
+                },
             ],
         });
         let smaa_edge_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3417,9 +3434,6 @@ impl GBuffer {
             _aa_history_b: history_texture_b,
             _aa_presented: aa_presented_texture,
             _ui_overlay: ui_overlay_texture,
-            _skybox_texture: skybox_gpu_texture,
-            _skybox_view: skybox_view,
-            _skybox_sampler: skybox_sampler,
             albedo,
             normal,
             pbr,
@@ -4052,6 +4066,11 @@ fn create_rain_resources(
                 binding: 6,
                 resource: resources.light_buffer.as_entire_binding(),
             },
+            texture_entry(7, resources.skybox_view),
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::Sampler(resources.skybox_sampler),
+            },
         ],
     });
     RainTextures {
@@ -4101,6 +4120,83 @@ fn upload_material_texture(
     );
     let view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
     (gpu_texture, view)
+}
+
+fn upload_environment_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    environment_map: &EnvironmentMap,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let (mip_count, bytes) = build_environment_mip_chain(environment_map);
+    let gpu_texture = device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: environment_map.panorama.width,
+                height: environment_map.panorama.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        TextureDataOrder::MipMajor,
+        &bytes,
+    );
+    let view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (gpu_texture, view)
+}
+
+fn build_environment_mip_chain(environment_map: &EnvironmentMap) -> (u32, Vec<u8>) {
+    let mut width = environment_map.panorama.width.max(1);
+    let mut height = environment_map.panorama.height.max(1);
+    let mut level: Vec<[f32; 4]> = (0..(width * height) as usize)
+        .map(|index| {
+            let radiance = environment_map.linear_texel(index);
+            [radiance.x, radiance.y, radiance.z, 1.0]
+        })
+        .collect();
+    let mut bytes = Vec::with_capacity(level.len() * 10);
+    let mut mip_count = 0;
+    loop {
+        for texel in &level {
+            for channel in texel {
+                bytes.extend_from_slice(&f16::from_f32(*channel).to_bits().to_le_bytes());
+            }
+        }
+        mip_count += 1;
+        if width == 1 && height == 1 {
+            break;
+        }
+        let next_width = (width / 2).max(1);
+        let next_height = (height / 2).max(1);
+        let mut next = Vec::with_capacity((next_width * next_height) as usize);
+        for y in 0..next_height {
+            for x in 0..next_width {
+                let mut sum = [0.0_f32; 4];
+                for offset_y in 0..2 {
+                    for offset_x in 0..2 {
+                        let source_x = (x * 2 + offset_x).min(width - 1);
+                        let source_y = (y * 2 + offset_y).min(height - 1);
+                        let sample = level[(source_y * width + source_x) as usize];
+                        for channel in 0..4 {
+                            sum[channel] += sample[channel];
+                        }
+                    }
+                }
+                next.push(sum.map(|channel| channel * 0.25));
+            }
+        }
+        level = next;
+        width = next_width;
+        height = next_height;
+    }
+    (mip_count, bytes)
 }
 
 fn upload_opacity_texture(
@@ -5098,6 +5194,13 @@ fn reflection_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             unfiltered_texture_layout_entry(9, wgpu::ShaderStages::COMPUTE),
             uniform_entry(10, wgpu::ShaderStages::COMPUTE),
             unfiltered_texture_layout_entry(11, wgpu::ShaderStages::COMPUTE),
+            sampled_texture_layout_entry(12, wgpu::ShaderStages::COMPUTE),
+            wgpu::BindGroupLayoutEntry {
+                binding: 13,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     })
 }
@@ -5198,6 +5301,14 @@ fn fog_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             storage_texture_layout_entry(1, wgpu::ShaderStages::COMPUTE, VOLUMETRIC_FOG_FORMAT),
             uniform_entry(2, wgpu::ShaderStages::COMPUTE),
             uniform_entry(3, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(4, wgpu::ShaderStages::COMPUTE),
+            sampled_texture_layout_entry(5, wgpu::ShaderStages::COMPUTE),
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     })
 }
@@ -5335,6 +5446,13 @@ fn rain_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             },
             uniform_entry(5, wgpu::ShaderStages::FRAGMENT),
             uniform_entry(6, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            sampled_texture_layout_entry(7, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 8,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     })
 }
@@ -5784,13 +5902,15 @@ mod tests {
         assert_eq!(uniform.local_position_radius[0], [0.9, 1.2, 1.1, 4.0]);
         assert_eq!(uniform.local_color_intensity[0][3], 5.0);
         assert_eq!(uniform.weather[..2], [1.0, 1.0]);
-        assert_eq!(uniform.environment, [0.0; 4]);
+        assert_eq!(uniform.environment, [-3.4, -0.25, 1.0, 0.0]);
+        assert!(uniform.environment_sh[0][0] > 0.0);
     }
 
     #[test]
     fn dry_environment_does_not_flicker_scene_lights() {
         let mut scene = crate::scene::build_demo_scene();
-        scene.environment = crate::scene::EnvironmentProfile::dry_daylight(0.765, 0.516);
+        scene.environment = crate::scene::EnvironmentProfile::dry_daylight();
+        scene.environment_map = scene.environment_map.with_exposure_and_yaw(0.765, 0.516);
         let uniform = LightUniform::from_scene(&scene);
         let realtime = uniform.realtime(12.5);
 

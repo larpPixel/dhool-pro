@@ -39,6 +39,7 @@ pub use quality::QualityTier;
 pub use renderer::{CpuRenderer, DebugView, RenderConfig, RenderOutput, RenderPath};
 pub use scene::{
     build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene, Camera,
-    EnvironmentProfile, ExposureProfile, Light, Material, Mesh, RenderScene, TextureImage,
+    EnvironmentEncoding, EnvironmentMap, EnvironmentProfile, ExposureProfile, Light, Material,
+    Mesh, RenderScene, TextureImage,
 };
 pub use world::{CameraRig, EntityId, MeshRenderer, RigidBody, Transform, World};

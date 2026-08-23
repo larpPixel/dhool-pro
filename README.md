@@ -12,7 +12,8 @@ cargo run --release -- --live
 ```
 
 The default scene is a rain-soaked monsoon city scene assembled from vendored Poly
-Haven CC0 models, PBR surfaces, and project-local generated facade/market textures.
+Haven CC0 models, PBR surfaces, a cloudy night HDR panorama, and project-local
+generated facade/market textures.
 The foreground alley opens into a wider cross-street, market lane, and distant
 apartment skyline. Press `Space` to pause or resume the cinematic camera; hold
 right mouse to mouselook; use `W`/`A`/`S`/`D` to move, `Q`/`E` to descend/ascend,
@@ -36,11 +37,15 @@ world-space lights, shadows, and reflections carry the scene illumination.
 Materials use mipmapped base-color, tangent-space normal, and packed
 AO/roughness/metallic maps.
 
-Lighting and weather come from each scene's environment profile. The monsoon
-city keeps rain, wet surfaces, and its broad exposure range; Dust2 selects dry
-daylight, its Source 2 sky orientation, and a tighter exterior exposure range.
-The shared Burley diffuse path is energy-normalized and uses a restrained sky
-hemisphere fill, so bright plaster keeps detail without crushing shaded alleys.
+Lighting and weather come from scene-owned environment data. One 2:1 panorama
+drives the visible sky, spherical-harmonic diffuse light, roughness-filtered
+reflections, fog color, rain fill, and white balance in both renderers. The
+monsoon city uses the bundled Kloppenheim cloudy-night HDR with rain and wet
+surfaces; Dust2 preserves its exported Source 2 panorama and dry daylight
+settings. Exposure and yaw are part of the map, so the visible clouds and their
+light cannot drift apart. The shared Burley diffuse path remains
+energy-normalized, keeping bright surfaces detailed without crushing shaded
+alleys.
 
 Scene meshes can opt into the shared fixed-step cloth component. The same
 deterministic solver drives the world/reference path and live GPU vertex uploads,
@@ -71,8 +76,8 @@ python3 -m http.server 8080 -d demo-output
 ```
 
 Open `http://localhost:8080`. By default the gallery exports diagnostics for
-the same `assets/aaa` monsoon city scene used by `--live`: the beauty frame,
-all 16 production debug views, and `timings.txt` with per-pass CPU measurements
+the same `assets/aaa` monsoon city scene used by `--live`: 17 production views
+(beauty plus 16 diagnostics) and `timings.txt` with per-pass CPU measurements
 and warnings.
 
 Asset origins, licenses, and refresh commands are recorded in

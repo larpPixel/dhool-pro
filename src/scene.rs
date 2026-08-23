@@ -7,7 +7,9 @@ use crate::gltf_import::{
     GltfImportError, GltfPrimitiveInfo, GltfTextureLimits,
 };
 use crate::math::{Color, Mat4, Vec2, Vec3, Vec4};
+use std::f32::consts::{PI, TAU};
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaterialClass {
@@ -90,22 +92,42 @@ impl TextureImage {
                 image = image.resize(width, height, image::imageops::FilterType::Triangle);
             }
         }
-        let rgba = image.to_rgba8();
-        Ok(Self {
-            width: rgba.width(),
-            height: rgba.height(),
-            pixels: rgba
-                .pixels()
-                .map(|pixel| {
-                    Color::new(
-                        pixel[0] as f32 / 255.0,
-                        pixel[1] as f32 / 255.0,
-                        pixel[2] as f32 / 255.0,
-                        pixel[3] as f32 / 255.0,
-                    )
+        match image {
+            image::DynamicImage::ImageRgb32F(image) => Ok(Self {
+                width: image.width(),
+                height: image.height(),
+                pixels: image
+                    .pixels()
+                    .map(|pixel| Color::new(pixel[0], pixel[1], pixel[2], 1.0))
+                    .collect(),
+            }),
+            image::DynamicImage::ImageRgba32F(image) => Ok(Self {
+                width: image.width(),
+                height: image.height(),
+                pixels: image
+                    .pixels()
+                    .map(|pixel| Color::new(pixel[0], pixel[1], pixel[2], pixel[3]))
+                    .collect(),
+            }),
+            image => {
+                let rgba = image.to_rgba8();
+                Ok(Self {
+                    width: rgba.width(),
+                    height: rgba.height(),
+                    pixels: rgba
+                        .pixels()
+                        .map(|pixel| {
+                            Color::new(
+                                pixel[0] as f32 / 255.0,
+                                pixel[1] as f32 / 255.0,
+                                pixel[2] as f32 / 255.0,
+                                pixel[3] as f32 / 255.0,
+                            )
+                        })
+                        .collect(),
                 })
-                .collect(),
-        })
+            }
+        }
     }
 
     pub fn sample_repeat(&self, uv: Vec2) -> Color {
@@ -117,6 +139,268 @@ impl TextureImage {
         let x = (u * (self.width - 1) as f32).round() as u32;
         let y = ((1.0 - v) * (self.height - 1) as f32).round() as u32;
         self.pixels[(y * self.width + x) as usize]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvironmentEncoding {
+    LinearHdr,
+    Srgb,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnvironmentMap {
+    pub panorama: Arc<TextureImage>,
+    pub encoding: EnvironmentEncoding,
+    linear_tint: Vec3,
+    exposure_ev: f32,
+    yaw_radians: f32,
+    irradiance_sh: [[f32; 3]; 9],
+}
+
+impl EnvironmentMap {
+    pub fn from_image(
+        panorama: TextureImage,
+        encoding: EnvironmentEncoding,
+        exposure_ev: f32,
+        yaw_radians: f32,
+    ) -> Self {
+        Self::new(panorama, encoding, exposure_ev, yaw_radians)
+    }
+
+    pub fn from_hdr_path(
+        path: impl AsRef<Path>,
+        exposure_ev: f32,
+        yaw_radians: f32,
+    ) -> Result<Self, String> {
+        Ok(Self::new(
+            TextureImage::from_path(path)?,
+            EnvironmentEncoding::LinearHdr,
+            exposure_ev,
+            yaw_radians,
+        ))
+    }
+
+    pub fn from_srgb_path(
+        path: impl AsRef<Path>,
+        exposure_ev: f32,
+        yaw_radians: f32,
+    ) -> Result<Self, String> {
+        Ok(Self::new(
+            TextureImage::from_path(path)?,
+            EnvironmentEncoding::Srgb,
+            exposure_ev,
+            yaw_radians,
+        ))
+    }
+
+    pub fn solid(color: Color) -> Self {
+        Self::new(
+            TextureImage {
+                width: 2,
+                height: 1,
+                pixels: vec![color; 2],
+            },
+            EnvironmentEncoding::Srgb,
+            0.0,
+            0.0,
+        )
+    }
+
+    fn from_hdr_bytes(bytes: &[u8], exposure_ev: f32, yaw_radians: f32) -> Result<Self, String> {
+        Ok(Self::new(
+            TextureImage::from_encoded_bytes_with_max_dimension(bytes, 0)?,
+            EnvironmentEncoding::LinearHdr,
+            exposure_ev,
+            yaw_radians,
+        ))
+    }
+
+    fn new(
+        panorama: TextureImage,
+        encoding: EnvironmentEncoding,
+        exposure_ev: f32,
+        yaw_radians: f32,
+    ) -> Self {
+        let mut environment = Self {
+            panorama: Arc::new(panorama),
+            encoding,
+            linear_tint: Vec3::ONE,
+            exposure_ev,
+            yaw_radians,
+            irradiance_sh: [[0.0; 3]; 9],
+        };
+        environment.irradiance_sh = environment.build_irradiance_sh();
+        environment
+    }
+
+    pub fn with_linear_tint(mut self, tint: Vec3) -> Self {
+        self.linear_tint = Vec3::new(tint.x.max(0.0), tint.y.max(0.0), tint.z.max(0.0));
+        self.irradiance_sh = self.build_irradiance_sh();
+        self
+    }
+
+    pub fn with_exposure_and_yaw(mut self, exposure_ev: f32, yaw_radians: f32) -> Self {
+        self.exposure_ev = exposure_ev;
+        self.yaw_radians = yaw_radians;
+        self.irradiance_sh = self.build_irradiance_sh();
+        self
+    }
+
+    pub fn sample_radiance(&self, direction: Vec3) -> Vec3 {
+        let direction = direction.normalize_or_zero();
+        if direction == Vec3::ZERO {
+            return Vec3::ZERO;
+        }
+        let uv = Vec2::new(
+            (0.5 + (direction.z.atan2(direction.x) + self.yaw_radians) / TAU).fract(),
+            (0.5 - direction.y.clamp(-1.0, 1.0).asin() / PI).clamp(0.0, 1.0),
+        );
+        let sample = self.sample_panorama(uv);
+        let radiance = self.decode_radiance(sample);
+        radiance * self.linear_tint * self.exposure_ev.exp2()
+    }
+
+    pub const fn exposure_ev(&self) -> f32 {
+        self.exposure_ev
+    }
+
+    pub const fn yaw_radians(&self) -> f32 {
+        self.yaw_radians
+    }
+
+    pub const fn irradiance_sh(&self) -> &[[f32; 3]; 9] {
+        &self.irradiance_sh
+    }
+
+    pub fn linear_texel(&self, index: usize) -> Vec3 {
+        self.panorama
+            .pixels
+            .get(index)
+            .copied()
+            .map(|sample| self.decode_radiance(sample) * self.linear_tint)
+            .unwrap_or(Vec3::ZERO)
+    }
+
+    pub fn diffuse_irradiance(&self, normal: Vec3) -> Vec3 {
+        let basis = sh_basis(normal.normalize_or_zero());
+        let mut irradiance = Vec3::ZERO;
+        for (coefficient, basis) in self.irradiance_sh.iter().zip(basis) {
+            irradiance += Vec3::new(coefficient[0], coefficient[1], coefficient[2]) * basis;
+        }
+        Vec3::new(
+            irradiance.x.max(0.0),
+            irradiance.y.max(0.0),
+            irradiance.z.max(0.0),
+        )
+    }
+
+    fn sample_panorama(&self, uv: Vec2) -> Color {
+        if self.panorama.width == 0 || self.panorama.height == 0 || self.panorama.pixels.is_empty()
+        {
+            return Color::BLACK;
+        }
+        let width = self.panorama.width as i32;
+        let height = self.panorama.height as i32;
+        let x = uv.x.rem_euclid(1.0) * self.panorama.width as f32 - 0.5;
+        let y = uv.y.clamp(0.0, 1.0) * self.panorama.height as f32 - 0.5;
+        let x0 = x.floor() as i32;
+        let y0 = y.floor() as i32;
+        let tx = x - x.floor();
+        let ty = y - y.floor();
+        let sample = |source_x: i32, source_y: i32| {
+            let wrapped_x = source_x.rem_euclid(width) as u32;
+            let clamped_y = source_y.clamp(0, height - 1) as u32;
+            self.panorama.pixels[(clamped_y * self.panorama.width + wrapped_x) as usize]
+        };
+        let top = mix_color(sample(x0, y0), sample(x0 + 1, y0), tx);
+        let bottom = mix_color(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
+        mix_color(top, bottom, ty)
+    }
+
+    fn decode_radiance(&self, sample: Color) -> Vec3 {
+        match self.encoding {
+            EnvironmentEncoding::LinearHdr => sample.to_vec3(),
+            EnvironmentEncoding::Srgb => Vec3::new(
+                srgb_to_linear(sample.r),
+                srgb_to_linear(sample.g),
+                srgb_to_linear(sample.b),
+            ),
+        }
+    }
+
+    fn build_irradiance_sh(&self) -> [[f32; 3]; 9] {
+        const WIDTH: u32 = 64;
+        const HEIGHT: u32 = 32;
+        const BAND_CONVOLUTION: [f32; 3] = [PI, 2.0 * PI / 3.0, PI / 4.0];
+        let mut coefficients = [[0.0_f32; 3]; 9];
+        let mut weight_sum = 0.0;
+        for y in 0..HEIGHT {
+            let theta = PI * (y as f32 + 0.5) / HEIGHT as f32;
+            let sin_theta = theta.sin();
+            let direction_y = theta.cos();
+            for x in 0..WIDTH {
+                let phi = TAU * (x as f32 + 0.5) / WIDTH as f32 - PI;
+                let direction =
+                    Vec3::new(sin_theta * phi.cos(), direction_y, sin_theta * phi.sin());
+                let radiance = self.sample_radiance(direction);
+                let basis = sh_basis(direction);
+                for index in 0..9 {
+                    coefficients[index][0] += radiance.x * basis[index] * sin_theta;
+                    coefficients[index][1] += radiance.y * basis[index] * sin_theta;
+                    coefficients[index][2] += radiance.z * basis[index] * sin_theta;
+                }
+                weight_sum += sin_theta;
+            }
+        }
+        let normalization = 4.0 * PI / weight_sum.max(f32::EPSILON);
+        for (index, coefficient) in coefficients.iter_mut().enumerate() {
+            let band = if index == 0 {
+                0
+            } else if index <= 3 {
+                1
+            } else {
+                2
+            };
+            for channel in coefficient {
+                *channel *= normalization * BAND_CONVOLUTION[band];
+            }
+        }
+        coefficients
+    }
+}
+
+fn mix_color(a: Color, b: Color, t: f32) -> Color {
+    Color::new(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a + (b.a - a.a) * t,
+    )
+}
+
+fn sh_basis(direction: Vec3) -> [f32; 9] {
+    let x = direction.x;
+    let y = direction.y;
+    let z = direction.z;
+    [
+        0.282_095,
+        0.488_603 * z,
+        0.488_603 * y,
+        0.488_603 * x,
+        1.092_548 * x * z,
+        1.092_548 * z * y,
+        0.315_392 * (3.0 * y * y - 1.0),
+        1.092_548 * x * y,
+        0.546_274 * (x * x - z * z),
+    ]
+}
+
+fn srgb_to_linear(channel: f32) -> f32 {
+    if channel <= 0.04045 {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
     }
 }
 
@@ -286,8 +570,8 @@ pub struct RenderScene {
     pub materials: Vec<Material>,
     pub meshes: Vec<Mesh>,
     pub lights: Vec<Light>,
-    pub sky_color: Color,
     pub ambient_color: Color,
+    pub environment_map: EnvironmentMap,
     pub environment: EnvironmentProfile,
 }
 
@@ -301,8 +585,6 @@ pub struct ExposureProfile {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EnvironmentProfile {
-    pub sky_exposure_ev: f32,
-    pub sky_yaw_radians: f32,
     pub precipitation: f32,
     pub surface_wetness: f32,
     pub wind: f32,
@@ -312,8 +594,6 @@ pub struct EnvironmentProfile {
 impl EnvironmentProfile {
     pub const fn rainy() -> Self {
         Self {
-            sky_exposure_ev: 0.0,
-            sky_yaw_radians: 0.0,
             precipitation: 1.0,
             surface_wetness: 1.0,
             wind: 0.18,
@@ -326,10 +606,8 @@ impl EnvironmentProfile {
         }
     }
 
-    pub const fn dry_daylight(sky_exposure_ev: f32, sky_yaw_radians: f32) -> Self {
+    pub const fn dry_daylight() -> Self {
         Self {
-            sky_exposure_ev,
-            sky_yaw_radians,
             precipitation: 0.0,
             surface_wetness: 0.0,
             wind: 0.08,
@@ -350,6 +628,35 @@ impl RenderScene {
             self.meshes.iter().map(Mesh::to_asset_desc).collect(),
         )
     }
+
+    pub fn environment_radiance(&self, direction: Vec3) -> Vec3 {
+        self.environment_map.sample_radiance(direction)
+    }
+
+    pub fn environment_irradiance(&self, normal: Vec3) -> Vec3 {
+        self.environment_map.diffuse_irradiance(normal) + self.ambient_color.to_vec3()
+    }
+}
+
+const MONSOON_ENVIRONMENT_BYTES: &[u8] =
+    include_bytes!("../assets/aaa/environment/kloppenheim_07_puresky_2k.hdr");
+const MONSOON_ENVIRONMENT_EXPOSURE_EV: f32 = -3.4;
+const MONSOON_ENVIRONMENT_YAW_RADIANS: f32 = -0.25;
+const MONSOON_ENVIRONMENT_TINT: Vec3 = Vec3::new(0.62, 0.78, 1.0);
+
+fn monsoon_environment_map() -> EnvironmentMap {
+    static ENVIRONMENT: OnceLock<EnvironmentMap> = OnceLock::new();
+    ENVIRONMENT
+        .get_or_init(|| {
+            EnvironmentMap::from_hdr_bytes(
+                MONSOON_ENVIRONMENT_BYTES,
+                MONSOON_ENVIRONMENT_EXPOSURE_EV,
+                MONSOON_ENVIRONMENT_YAW_RADIANS,
+            )
+            .expect("bundled monsoon HDR environment must decode")
+            .with_linear_tint(MONSOON_ENVIRONMENT_TINT)
+        })
+        .clone()
 }
 
 pub fn build_demo_scene() -> RenderScene {
@@ -552,8 +859,8 @@ pub fn build_demo_scene() -> RenderScene {
                 casts_shadow: true,
             },
         ],
-        sky_color: Color::rgb(0.08, 0.12, 0.18),
         ambient_color: Color::rgb(0.035, 0.045, 0.055),
+        environment_map: monsoon_environment_map(),
         environment: EnvironmentProfile::rainy(),
     }
 }
@@ -624,9 +931,6 @@ const CS2_DUST2_LIVE_IMPORT_BUDGET: GltfImportBudget = GltfImportBudget {
     max_vertices: 5_000_000,
     max_triangles: 5_000_000,
 };
-const CS2_DUST2_SOURCE_SKYBOX_MATERIAL: &str = "materials/skybox/sky_de_dust2.vmat";
-const CS2_DUST2_SOURCE_POSTPROCESS: &str =
-    "lighting/postprocessing/de_dust2_prefab/de_dust2_prefab.vpost";
 const CS2_DUST2_SOURCE_MIN_EXPOSURE: f32 = 0.925;
 const CS2_DUST2_SOURCE_MAX_EXPOSURE: f32 = 1.1;
 const CS2_DUST2_SOURCE_SKY_INTENSITY: f32 = 0.960_784;
@@ -635,12 +939,6 @@ const CS2_DUST2_SOURCE_SUN_COLOR: Color = Color {
     r: 1.0,
     g: 222.0 / 255.0,
     b: 189.0 / 255.0,
-    a: 1.0,
-};
-const CS2_DUST2_SOURCE_SKY_COLOR: Color = Color {
-    r: 211.0 / 255.0,
-    g: 226.0 / 255.0,
-    b: 248.0 / 255.0,
     a: 1.0,
 };
 const CS2_DUST2_SOURCE_SKY_AMBIENT: Color = Color {
@@ -670,6 +968,7 @@ const CS2_DUST2_SOURCE_COOL_BARN_COLOR: Color = Color {
 
 pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImportError> {
     let root = root.as_ref();
+    let environment_map = load_dust2_environment_map(root)?;
     let visual_path = root
         .join("generated")
         .join("cs2")
@@ -679,7 +978,7 @@ pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImpo
     let mut scene = if !force_physics
         && (visual_path.is_file() || std::env::var_os(CS2_DUST2_VISUAL_IMPORT_ENV).is_some())
     {
-        build_cs2_dust2_visual_scene(root, &visual_path)?
+        build_cs2_dust2_visual_scene(&visual_path, environment_map)?
     } else {
         let world_path = root
             .join("generated")
@@ -693,7 +992,7 @@ pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImpo
                 visual_path.display()
             )));
         }
-        build_cs2_dust2_physics_scene(root, &world_path)?
+        build_cs2_dust2_physics_scene(root, &world_path, environment_map)?
     };
     add_dust2_cloth_fixture(&mut scene);
     Ok(scene)
@@ -728,8 +1027,8 @@ fn add_dust2_cloth_fixture(scene: &mut RenderScene) {
 }
 
 fn build_cs2_dust2_visual_scene(
-    _root: &Path,
     visual_path: &Path,
+    environment_map: EnvironmentMap,
 ) -> Result<RenderScene, GltfImportError> {
     let import_budget = if std::env::var_os(CS2_DUST2_FULL_IMPORT_ENV).is_some() {
         None
@@ -746,8 +1045,6 @@ fn build_cs2_dust2_visual_scene(
     for material in &mut materials {
         tune_cs2_dust2_material(material);
     }
-    debug_assert!(cs2_dust2_source_lighting_data_available());
-
     meshes.retain(|mesh| cs2_dust2_keep_visual_mesh(mesh, &materials));
     for mesh in &mut meshes {
         let source_name = mesh.name.clone();
@@ -778,15 +1075,16 @@ fn build_cs2_dust2_visual_scene(
         materials,
         meshes,
         lights,
-        sky_color: CS2_DUST2_SOURCE_SKY_COLOR,
         ambient_color: cs2_dust2_source_ambient_color(),
-        environment: EnvironmentProfile::dry_daylight(0.765, 0.516),
+        environment_map,
+        environment: EnvironmentProfile::dry_daylight(),
     })
 }
 
 fn build_cs2_dust2_physics_scene(
     root: &Path,
     world_path: &Path,
+    environment_map: EnvironmentMap,
 ) -> Result<RenderScene, GltfImportError> {
     if !world_path.is_file() {
         return Err(GltfImportError::Gltf(format!(
@@ -820,10 +1118,21 @@ fn build_cs2_dust2_physics_scene(
         materials,
         meshes,
         lights: cs2_dust2_lights(),
-        sky_color: CS2_DUST2_SOURCE_SKY_COLOR,
         ambient_color: cs2_dust2_source_ambient_color(),
-        environment: EnvironmentProfile::dry_daylight(0.765, 0.516),
+        environment_map,
+        environment: EnvironmentProfile::dry_daylight(),
     })
+}
+
+fn load_dust2_environment_map(root: &Path) -> Result<EnvironmentMap, GltfImportError> {
+    let path = root
+        .join("generated")
+        .join("cs2")
+        .join("materials")
+        .join("skybox")
+        .join("sky_de_dust2.png");
+    EnvironmentMap::from_srgb_path(&path, 0.765, 0.516)
+        .map_err(|message| GltfImportError::Gltf(format!("{}: {message}", path.display())))
 }
 
 fn cs2_dust2_source_ambient_color() -> Color {
@@ -836,10 +1145,6 @@ fn cs2_dust2_source_ambient_color() -> Color {
         CS2_DUST2_SOURCE_SKY_AMBIENT.g * scale,
         CS2_DUST2_SOURCE_SKY_AMBIENT.b * scale,
     )
-}
-
-fn cs2_dust2_source_lighting_data_available() -> bool {
-    !CS2_DUST2_SOURCE_SKYBOX_MATERIAL.is_empty() && !CS2_DUST2_SOURCE_POSTPROCESS.is_empty()
 }
 
 fn cs2_dust2_lights() -> Vec<Light> {
@@ -1841,8 +2146,8 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
                 casts_shadow: false,
             },
         ],
-        sky_color: Color::rgb(0.006, 0.014, 0.034),
-        ambient_color: Color::rgb(0.024, 0.030, 0.046),
+        ambient_color: Color::rgb(0.040, 0.052, 0.078),
+        environment_map: monsoon_environment_map(),
         environment: EnvironmentProfile::rainy(),
     };
 

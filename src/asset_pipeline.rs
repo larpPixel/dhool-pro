@@ -304,6 +304,15 @@ impl AssetPipeline {
 
     pub fn build_from_scene(scene: &RenderScene, quality: QualityTier) -> (Self, ImportReport) {
         let mut pipeline = Self::new(quality);
+        let environment_id = pipeline.import_asset(
+            "scene_environment",
+            ImportedAsset::Texture(TextureDesc {
+                name: "scene_environment_radiance".to_string(),
+                format: TextureFormat::Rgba16Float,
+                role: TextureRole::EnvironmentRadiance,
+            }),
+        );
+        let environment_error = validate_environment_dimensions(scene);
         for material in &scene.materials {
             pipeline.import_asset(
                 material.name.clone(),
@@ -319,6 +328,9 @@ impl AssetPipeline {
                 if reflective && !mesh.reflection_proxy {
                     let id = pipeline.find(&mesh.name);
                     let mut report = pipeline.validate();
+                    if let Some(message) = &environment_error {
+                        report.push(ImportSeverity::Error, Some(environment_id), message.clone());
+                    }
                     report.push(
                         ImportSeverity::Error,
                         id,
@@ -344,9 +356,33 @@ impl AssetPipeline {
                 lights: scene.lights.len(),
             },
         );
-        let report = pipeline.validate();
+        let mut report = pipeline.validate();
+        if let Some(message) = environment_error {
+            report.push(ImportSeverity::Error, Some(environment_id), message);
+        }
         (pipeline, report)
     }
+}
+
+fn validate_environment_dimensions(scene: &RenderScene) -> Option<String> {
+    let panorama = &scene.environment_map.panorama;
+    if panorama.width == 0 || panorama.height == 0 || panorama.pixels.is_empty() {
+        return Some("scene environment panorama is empty".to_string());
+    }
+    if panorama.width != panorama.height.saturating_mul(2) {
+        return Some(format!(
+            "scene environment panorama must be 2:1 equirectangular, got {}x{}",
+            panorama.width, panorama.height
+        ));
+    }
+    if panorama.pixels.len() != panorama.width.saturating_mul(panorama.height) as usize {
+        return Some(format!(
+            "scene environment panorama has {} pixels, expected {}",
+            panorama.pixels.len(),
+            panorama.width.saturating_mul(panorama.height)
+        ));
+    }
+    None
 }
 
 fn find_material_id(materials: &[MaterialDesc], name: &str, ids: &[AssetId]) -> Option<AssetId> {

@@ -12,6 +12,7 @@ struct Lights {
     sky: vec4<f32>,
     weather: vec4<f32>,
     environment: vec4<f32>,
+    environment_sh: array<vec4<f32>, 9>,
     local_position_radius: array<vec4<f32>, 6>,
     local_color_intensity: array<vec4<f32>, 6>,
     local_direction_outer: array<vec4<f32>, 6>,
@@ -25,10 +26,14 @@ struct Lights {
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
 @group(0) @binding(5) var<uniform> light_camera: Camera;
 @group(0) @binding(6) var<uniform> lights: Lights;
+@group(0) @binding(7) var skybox: texture_2d<f32>;
+@group(0) @binding(8) var skybox_sampler: sampler;
 const RAIN_GRID_X: u32 = 64u;
 const RAIN_GRID_Z: u32 = 64u;
 const RAIN_BOUNDS_MIN: vec3<f32> = vec3<f32>(-18.5, 0.14, -82.0);
 const RAIN_BOUNDS_SIZE: vec3<f32> = vec3<f32>(37.0, 13.5, 100.0);
+const INV_PI: f32 = 0.31830988618;
+const INV_TAU: f32 = 0.15915494309;
 
 
 struct VertexOutput {
@@ -91,6 +96,16 @@ fn rain_wind_direction() -> vec3<f32> {
         -1.0,
         0.08 + lights.weather.z * 0.05
     ));
+}
+
+fn environment_radiance(direction: vec3<f32>) -> vec3<f32> {
+    let ray = safe_normalize(direction);
+    let panorama_uv = vec2<f32>(
+        fract(0.5 + (atan2(ray.z, ray.x) + lights.environment.y) * INV_TAU),
+        clamp(0.5 - asin(clamp(ray.y, -1.0, 1.0)) * INV_PI, 0.0, 1.0)
+    );
+    return textureSampleLevel(skybox, skybox_sampler, panorama_uv, 1.5).rgb
+        * exp2(lights.environment.x);
 }
 
 fn wrap_rain_xz(xz: vec2<f32>) -> vec2<f32> {
@@ -173,7 +188,10 @@ fn practical_spot_fill(light_index: u32, cone: f32) -> f32 {
 }
 
 fn rain_light_response(world_position: vec3<f32>, view_direction: vec3<f32>, rain_axis: vec3<f32>) -> vec3<f32> {
-    var radiance = lights.ambient.rgb * 1.25 + lights.sky.rgb * 0.38;
+    let directional_fill = environment_radiance(-view_direction);
+    var radiance = lights.ambient.rgb * 1.10
+        + lights.sky.rgb * 0.24
+        + directional_fill * 0.34;
     let moon_direction = safe_normalize(lights.directional_direction_count.xyz);
     if lights.directional_color_intensity.w > 0.0 && length(moon_direction) > 0.0 {
         let moon_side_scatter = 0.22 + 0.78 * (1.0 - abs(dot(moon_direction, rain_axis)));

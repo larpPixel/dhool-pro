@@ -1,7 +1,7 @@
-use dhool_pro::math::{Mat4, Vec4};
+use dhool_pro::math::{Color, Mat4, Vec3, Vec4};
 use dhool_pro::perf::{gt_tonemap_rgba8, kawase_blur_rgba32f};
 use dhool_pro::renderer::RenderWarning;
-use dhool_pro::scene::LightKind;
+use dhool_pro::scene::{EnvironmentEncoding, EnvironmentMap, LightKind, TextureImage};
 use dhool_pro::{
     build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene, CpuRenderer,
     DebugView, RenderConfig,
@@ -52,6 +52,44 @@ fn reverse_z_projection_maps_near_to_one_and_far_to_zero() {
         "near depth was {near_depth}"
     );
     assert!(far_depth.abs() < 1.0e-5, "far depth was {far_depth}");
+}
+
+#[test]
+fn environment_map_applies_radian_yaw_exposure_and_diffuse_convolution() {
+    let mut pixels = vec![Color::BLACK; 8 * 4];
+    for y in 0..4 {
+        for x in 3..=4 {
+            pixels[y * 8 + x] = Color::rgb(1.0, 0.0, 0.0);
+        }
+        for x in [0, 7] {
+            pixels[y * 8 + x] = Color::rgb(0.0, 0.0, 1.0);
+        }
+    }
+    let texture = TextureImage {
+        width: 8,
+        height: 4,
+        pixels,
+    };
+    let forward = EnvironmentMap::from_image(texture.clone(), EnvironmentEncoding::Srgb, 0.0, 0.0);
+    let rotated = EnvironmentMap::from_image(
+        texture.clone(),
+        EnvironmentEncoding::Srgb,
+        0.0,
+        std::f32::consts::PI,
+    );
+    let brighter = EnvironmentMap::from_image(texture.clone(), EnvironmentEncoding::Srgb, 1.0, 0.0);
+    let tinted = EnvironmentMap::from_image(texture, EnvironmentEncoding::Srgb, 0.0, 0.0)
+        .with_linear_tint(Vec3::new(0.5, 1.0, 1.0));
+
+    let forward_radiance = forward.sample_radiance(Vec3::X);
+    let rotated_radiance = rotated.sample_radiance(Vec3::X);
+    let brighter_radiance = brighter.sample_radiance(Vec3::X);
+    let tinted_radiance = tinted.sample_radiance(Vec3::X);
+    assert!(forward_radiance.x > 0.9 && forward_radiance.z < 0.1);
+    assert!(rotated_radiance.z > 0.9 && rotated_radiance.x < 0.1);
+    assert!((brighter_radiance.x - forward_radiance.x * 2.0).abs() < 0.01);
+    assert!((tinted_radiance.x - forward_radiance.x * 0.5).abs() < 0.01);
+    assert!(forward.diffuse_irradiance(Vec3::Y).x > 0.0);
 }
 
 #[test]
@@ -134,6 +172,13 @@ fn aaa_scene_loads_cc0_pbr_assets() {
         .all(|mesh| mesh.shadow_class == dhool_pro::asset::ShadowCasterClass::None));
     assert_eq!(scene.environment.precipitation, 1.0);
     assert_eq!(scene.environment.surface_wetness, 1.0);
+    assert_eq!(scene.environment_map.panorama.width, 2_048);
+    assert_eq!(scene.environment_map.panorama.height, 1_024);
+    assert_eq!(
+        scene.environment_map.encoding,
+        EnvironmentEncoding::LinearHdr
+    );
+    assert!(scene.environment_map.irradiance_sh()[0][0] > 0.0);
     assert!(scene
         .meshes
         .iter()
@@ -380,6 +425,11 @@ fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
         assert!(scene.camera.position.z < -30.0);
         assert_eq!(scene.environment.precipitation, 0.0);
         assert_eq!(scene.environment.surface_wetness, 0.0);
+        assert_eq!(scene.environment_map.panorama.width, 2_048);
+        assert_eq!(scene.environment_map.panorama.height, 1_024);
+        assert_eq!(scene.environment_map.encoding, EnvironmentEncoding::Srgb);
+        assert!((scene.environment_map.exposure_ev() - 0.765).abs() < f32::EPSILON);
+        assert!((scene.environment_map.yaw_radians() - 0.516).abs() < f32::EPSILON);
         assert!(scene
             .meshes
             .iter()
@@ -398,11 +448,10 @@ fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
     assert!(scene_source.contains("import_gltf_with_texture_limits_filter_budget_by_primitive"));
     assert!(scene_source.contains("CS2_DUST2_STRUCTURAL_TEXTURE_DIMENSION"));
     assert!(scene_source.contains("CS2_DUST2_STRUCTURAL_PBR_TEXTURE_DIMENSION"));
-    assert!(scene_source.contains("materials/skybox/sky_de_dust2.vmat"));
-    assert!(scene_source.contains("lighting/postprocessing/de_dust2_prefab/de_dust2_prefab.vpost"));
+    assert!(scene_source.contains("load_dust2_environment_map"));
+    assert!(scene_source.contains("EnvironmentMap::from_srgb_path"));
     assert!(scene_source.contains("0.925"));
     assert!(scene_source.contains("1.1"));
-    assert!(scene_source.contains("211.0 / 255.0"));
     assert!(scene_source.contains("CS2_DUST2_SOURCE_SUN_COLOR"));
     assert!(scene_source.contains("cs2_dust2_visual_lights"));
     assert!(scene_source.contains("DHOOL_DUST2_PHYSICS_IMPORT"));
@@ -418,8 +467,10 @@ fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
     assert!(import_source.contains("compact_indexed_geometry"));
 
     let gpu_source = std::fs::read_to_string("src/gpu.rs").expect("GPU source");
-    assert!(gpu_source.contains("DUST2_SKYBOX_TEXTURE"));
-    assert!(gpu_source.contains("live_skybox_texture_for_map"));
+    assert!(!gpu_source.contains("DUST2_SKYBOX_TEXTURE"));
+    assert!(!gpu_source.contains("live_skybox_texture_for_map"));
+    assert!(gpu_source.contains("upload_environment_texture"));
+    assert!(gpu_source.contains("Rgba16Float"));
     assert!(gpu_source.contains("lighting-skybox-panorama"));
     assert!(gpu_source.contains("ControlFlow::Poll"));
     assert!(gpu_source.contains("fn about_to_wait"));
@@ -432,10 +483,11 @@ fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
     assert!(lighting_source.contains("exp2(lights.environment.x)"));
     assert!(lighting_source.contains("lights.environment.y"));
     assert!(lighting_source.contains("INV_PI"));
-    assert!(lighting_source.contains("sky_hemisphere_irradiance"));
+    assert!(lighting_source.contains("environment_irradiance"));
+    assert!(lighting_source.contains("environment_sh"));
 
     assert!(gpu_source.contains("scene.environment.precipitation"));
-    assert!(gpu_source.contains("scene.environment.sky_exposure_ev"));
+    assert!(gpu_source.contains("scene.environment_map.exposure_ev()"));
     assert!(gpu_source.contains("fn update_cloth"));
     assert!(gpu_source.contains("BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST"));
     assert!(gpu_source.contains("scene-previous-positions"));
@@ -714,6 +766,8 @@ fn live_rain_path_uses_generated_detail_atlas_not_flat_overlay_assets() {
     let rain_shader = include_str!("../src/shaders/rain3d.wgsl");
 
     assert!(std::path::Path::new("assets/aaa/rain/generated_streak_detail.png").is_file());
+    assert!(!std::path::Path::new("assets/aaa/rain/rain_overlay.png").exists());
+    assert!(!std::path::Path::new("assets/aaa/rain/ripples_0003.png").exists());
     assert!(gpu.contains("GENERATED_RAIN_STREAK_DETAIL"));
     assert!(gpu.contains("rain-streak-detail"));
     assert!(rain_shader.contains("var rain_streak_detail: texture_2d<f32>"));

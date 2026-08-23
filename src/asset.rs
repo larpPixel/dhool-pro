@@ -8,6 +8,7 @@ pub enum TextureFormat {
     Bc5,
     Bc7,
     Rgba8,
+    Rgba16Float,
     Other,
 }
 
@@ -18,6 +19,7 @@ pub enum TextureRole {
     SpecularRoughnessHeight,
     BinaryMask,
     Opacity,
+    EnvironmentRadiance,
     Other,
 }
 

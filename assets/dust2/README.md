@@ -33,8 +33,9 @@ The script exports:
 
 `build_dust2_scene()` prefers the visual `de_dust2.glb` export, caps decoded
 runtime texture size for memory safety, filters Source 2 tool/clip meshes, adds
-the converted Dust2 panorama directly to live sky lighting, and retains the
-physics GLB only as a compatibility fallback. The importer fails if sky
+the converted Dust2 panorama to the scene-owned environment used by both the
+live and reference renderers, and retains the physics GLB only as a compatibility
+fallback. The importer fails if sky
 extraction or conversion does not produce a non-empty file. It no longer
 silently falls back to CC0 placeholder boxes.
 
@@ -45,7 +46,8 @@ the imported map at player height. Hold right mouse to look, use `W`/`A`/`S`/`D`
 to move, `Q`/`E` to descend/ascend, and `Shift` to boost.
 
 Dust2 uses a dry-daylight environment profile: rain and wet-surface effects are
-disabled, while sky exposure/yaw and auto-exposure limits come from the scene.
+disabled, while the exported panorama supplies visible radiance, diffuse light,
+reflection fallback, fog color, exposure color, and sky exposure/yaw.
 For a deterministic comparison capture, add `--static-camera --frames 40
 --capture /tmp/dhool-dust2.png`; capture mode omits the FPS overlay.
 

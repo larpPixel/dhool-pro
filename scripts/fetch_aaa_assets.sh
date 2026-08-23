@@ -44,7 +44,15 @@ fetch_surface() {
     done
 }
 
-
+fetch_hdri() {
+    id=$1
+    resolution=$2
+    target="$destination/environment/${id}_${resolution}.hdr"
+    mkdir -p "$(dirname "$target")"
+    curl --fail --location --silent --show-error "$api/$id" -o "$temporary"
+    url=$(jq -r --arg resolution "$resolution" '.hdri[$resolution].hdr.url' "$temporary")
+    download "$url" "$target"
+}
 
 for model in Barrel_01 street_lamp_01 concrete_road_barrier steel_frame_shelves_01 utility_box_01 old_tyre metal_trash_can; do
     fetch_model "$model"
@@ -54,5 +62,5 @@ for surface in asphalt_02 concrete_floor brick_wall_08 metal_plate_02; do
     fetch_surface "$surface"
 done
 
-
+fetch_hdri kloppenheim_07_puresky 2k
 find "$destination" -type f -print0 | sort -z | xargs -0 sha256sum
