@@ -16,6 +16,7 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
+    environment: vec4<f32>,
     local_position_radius: array<vec4<f32>, 6>,
     local_color_intensity: array<vec4<f32>, 6>,
     local_direction_outer: array<vec4<f32>, 6>,

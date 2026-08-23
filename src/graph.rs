@@ -576,14 +576,6 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         Format::Rgba16,
         ResourceKind::PostProcess,
     ));
-    let composite_effects = graph.add_resource(
-        ResourceDesc::new(
-            "half-resolution-camera-composite-effects",
-            Format::Rgba16,
-            ResourceKind::PostProcess,
-        )
-        .scaled(0.5, 0.5),
-    );
     let aa_history = graph.add_resource(ResourceDesc::new(
         "two-frame-spatial-smaa-history",
         Format::Rgb10A2,
@@ -856,20 +848,6 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
 
     graph.add_pass(
         RenderPassDesc::new(
-            "half-resolution-camera-composite-effects",
-            "post",
-            FeatureCategory::PostProcess,
-            0.5,
-        )
-        .resolution_scale(0.5)
-        .read(velocity_b)
-        .read(depth_copy)
-        .write(composite_effects)
-        .target_format(Format::Rgba16),
-    );
-
-    graph.add_pass(
-        RenderPassDesc::new(
             "kawase-bloom-chain",
             "post",
             FeatureCategory::PostProcess,
@@ -891,7 +869,6 @@ pub fn build_baseline_frame_graph() -> RenderGraph {
         .read(volumetric_fog)
         .read(bloom)
         .read(exposure_white_balance)
-        .read(composite_effects)
         .write(tone_mapped)
         .target_format(Format::Rgb10A2),
     );

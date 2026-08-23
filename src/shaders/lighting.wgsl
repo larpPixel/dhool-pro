@@ -11,6 +11,7 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
+    environment: vec4<f32>,
     local_position_radius: array<vec4<f32>, 6>,
     local_color_intensity: array<vec4<f32>, 6>,
     local_direction_outer: array<vec4<f32>, 6>,
@@ -49,9 +50,8 @@ const EMISSIVE_SCALE: f32 = 12.0;
 const PRACTICAL_SPOT_MIN_FILL: f32 = 0.26;
 const PRACTICAL_SPOT_MIN_SHADOW: f32 = 0.24;
 const INV_PI: f32 = 0.31830988618;
+const SKY_HEMISPHERE_SCALE: f32 = 0.24;
 const INV_TAU: f32 = 0.15915494309;
-const SOURCE2_DUST2_SKY_EXPOSURE_BIAS: f32 = 0.765;
-const DUST2_SKY_YAW_OFFSET: f32 = 0.516;
 
 
 struct VertexOutput {
@@ -183,11 +183,11 @@ fn sky_radiance(uv: vec2<f32>) -> vec3<f32> {
     let skybox_size = textureDimensions(skybox);
     if skybox_size.x > 1u || skybox_size.y > 1u {
         let panorama_uv = vec2<f32>(
-            fract(0.5 + atan2(ray.z, ray.x) * INV_TAU + DUST2_SKY_YAW_OFFSET),
+            fract(0.5 + atan2(ray.z, ray.x) * INV_TAU + lights.environment.y),
             clamp(0.5 - asin(clamp(ray.y, -1.0, 1.0)) * INV_PI, 0.0, 1.0)
         );
         let source_sky = textureSample(skybox, skybox_sampler, panorama_uv).rgb
-            * exp2(SOURCE2_DUST2_SKY_EXPOSURE_BIAS);
+            * exp2(lights.environment.x);
         return source_sky + moon * 0.10;
     }
 
@@ -499,7 +499,8 @@ fn shade_light(
         * light_scatter
         * view_scatter
         * surface.z
-        * (1.0 - wetness * 0.38);
+        * (1.0 - wetness * 0.38)
+        * INV_PI;
     let ndoth = max(dot(normal, half_direction), 0.0);
     let specular_power = mix(220.0, 9.0, roughness);
     var f0 = mix(dielectric_profile.rgb, conductor_profile.rgb, vec3<f32>(surface.y));
@@ -519,6 +520,12 @@ fn shade_light(
         transmission = base * vec3<f32>(1.0, 0.42, 0.30) * back_scatter * surface.z;
     }
     return (diffuse + specular + transmission) * radiance;
+}
+
+fn sky_hemisphere_irradiance(normal: vec3<f32>) -> vec3<f32> {
+    let up = max(normal.y, 0.0);
+    let sky_weight = 0.18 + up * 0.82;
+    return lights.sky.rgb * sky_weight * SKY_HEMISPHERE_SCALE;
 }
 
 
@@ -582,7 +589,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let view_direction = safe_normalize(camera.position_time.xyz - world_position);
     let ssao = screen_space_occlusion(pixel, world_position, normal);
     let contact_visibility = mix(ssao, 1.0, 0.16);
-    let ambient = lights.ambient.rgb * (0.18 + max(normal.y, 0.0) * 0.30);
+    let indirect_irradiance =
+        lights.ambient.rgb * (0.18 + max(normal.y, 0.0) * 0.30)
+        + sky_hemisphere_irradiance(normal);
+    let ambient = indirect_irradiance * INV_PI;
     let sun_shadow = shadow_visibility(world_position, normal, light_direction);
     let transparent_diffuse_weight = mix(1.0, 0.24 + opacity * 0.18, glass_mask);
     var hdr = base
@@ -599,6 +609,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let directional_radiance =
             lights.directional_color_intensity.rgb * lights.directional_color_intensity.w * sun_shadow * directional_contact;
         diffuse_illuminance += luminance(directional_radiance)
+            * INV_PI
             * max(dot(normal, light_direction), 0.0) * contact_visibility;
         hdr += shade_light(base, normal, view_direction, effective_surface, wetness, light_direction, directional_radiance, material_profile_id, material_class)
             * contact_visibility;
@@ -683,7 +694,10 @@ fn fs_local_lights(input: VertexOutput) -> @location(0) vec4<f32> {
         let contact = screen_space_contact_shadow(pixel, world_position, normal, local_direction, clamp(distance_to_light * 0.42, 0.42, 1.45), 0.46);
         let radiance = color_intensity.rgb * color_intensity.w * attenuation * spot * shadow * contact * (1.0 + (1.0 - sun_shadow) * 0.12);
         local_hdr += shade_light(base, normal, view_direction, effective_surface, wetness, local_direction, radiance, material_profile_id, material_class) * contact_visibility;
-        local_diffuse += luminance(radiance) * max(dot(normal, local_direction), 0.0) * contact_visibility;
+        local_diffuse += luminance(radiance)
+            * INV_PI
+            * max(dot(normal, local_direction), 0.0)
+            * contact_visibility;
     }
     return vec4<f32>(max(local_hdr, vec3<f32>(0.0)), max(local_diffuse, 0.0));
 }

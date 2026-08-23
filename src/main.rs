@@ -11,15 +11,17 @@ fn main() {
         let map = option_value(&args, "--map");
         let max_frames = option_value(&args, "--frames").and_then(|value| value.parse().ok());
         let capture_path = option_value(&args, "--capture").map(Into::into);
-        let exposure_min = option_f32(&args, "--exposure-min", 0.35);
-        let exposure_max = option_f32(&args, "--exposure-max", 3.5);
-        let exposure_compensation = option_f32(&args, "--exposure-compensation", 0.0);
-        let white_balance_strength = option_f32(&args, "--white-balance-strength", 1.0);
-        let velocity_compensation_strength = option_f32(&args, "--velocity-strength", 0.65);
-        let camera_velocity_cutoff = option_f32(&args, "--velocity-cutoff", 8.0);
-        let display_gamma = option_f32(&args, "--display-gamma", 2.2);
-        let display_brightness = option_f32(&args, "--display-brightness", 1.0);
+        let exposure_min = option_f32(&args, "--exposure-min");
+        let exposure_max = option_f32(&args, "--exposure-max");
+        let exposure_compensation = option_f32(&args, "--exposure-compensation");
+        let white_balance_strength = option_f32(&args, "--white-balance-strength");
+        let velocity_compensation_strength =
+            option_f32(&args, "--velocity-strength").unwrap_or(0.65);
+        let camera_velocity_cutoff = option_f32(&args, "--velocity-cutoff").unwrap_or(8.0);
+        let display_gamma = option_f32(&args, "--display-gamma").unwrap_or(2.2);
+        let display_brightness = option_f32(&args, "--display-brightness").unwrap_or(1.0);
         let profile_gpu = args.iter().any(|arg| arg == "--profile-gpu");
+        let static_camera = args.iter().any(|arg| arg == "--static-camera");
         if let Err(error) = run_live_renderer(LiveOptions {
             asset: asset.into(),
             map,
@@ -36,6 +38,7 @@ fn main() {
             display_gamma,
             display_brightness,
             profile_gpu,
+            static_camera,
         }) {
             eprintln!("live renderer failed: {error}");
             std::process::exit(2);
@@ -138,10 +141,8 @@ fn option_value(args: &[String], option: &str) -> Option<String> {
         .cloned()
 }
 
-fn option_f32(args: &[String], option: &str, default: f32) -> f32 {
-    option_value(args, option)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
+fn option_f32(args: &[String], option: &str) -> Option<f32> {
+    option_value(args, option).and_then(|value| value.parse().ok())
 }
 
 #[cfg(target_os = "linux")]

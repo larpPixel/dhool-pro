@@ -1,5 +1,6 @@
 use crate::renderer::{CpuRenderer, DebugView, RenderConfig};
 use crate::scene::{build_aaa_scene, build_asset_showcase, build_dust2_scene};
+use crate::world::World;
 use image::{ColorType, ImageFormat};
 use std::fmt::Write as _;
 use std::fs;
@@ -28,6 +29,13 @@ pub fn export_demo_gallery(
         _ => build_asset_showcase(asset_path),
     }
     .map_err(|error| error.to_string())?;
+    let mut world = World::from_render_scene(scene);
+    for _ in 0..30 {
+        world
+            .fixed_update(1.0 / 60.0)
+            .map_err(|error| error.to_string())?;
+    }
+    let scene = world.into_render_scene();
     let output_dir = output_dir.as_ref();
     fs::create_dir_all(output_dir).map_err(|error| error.to_string())?;
 

@@ -28,6 +28,7 @@ Status definitions:
 | Alpha-aware shadow maps without penalizing opaque casters | Live | Opaque casters use the vertex-only shadow pipeline; alpha casters use `alpha_shadow.wgsl` and the dedicated opacity texture. |
 | Dual material profiles instead of a metallic-only interpretation | Live | A 256-entry dielectric/conductor GPU table is indexed by packed material ID. It also carries skin, hair, and foliage response metadata. |
 | Skin transmission/wrapped diffuse and anisotropic hair response | Live + Reference | The live material-profile lighting path handles skin/foliage backscatter and a strand-oriented hair highlight; the CPU renderer retains class-specific Fresnel behavior. Eyes remain ordinary compact forward/deferred material geometry because the transcript calls advanced eye/hair work unfinished. |
+| Fixed-step dynamic cloth geometry | Live + Reference | A shared deterministic Verlet/PBD solver handles pins, structural and bending constraints, wind, floor/sphere/box contacts, tangent-basis rebuilding, previous positions, GPU range uploads, motion vectors, and shadow-cache invalidation. Scene cloth is explicit mesh metadata rather than a renderer-specific effect. |
 | LOD topology, two-position Bayer transitions, and synchronized shadow fades | Contract / missing runtime system | Import validation catches dense alpha cards and long thin triangles. This demo has no streaming runtime LOD set, so it does not claim live fades. |
 
 ## Depth, visibility, shadows, and lighting
@@ -44,6 +45,7 @@ Status definitions:
 | Hardware stencil-volume local lighting | Live | Main depth is D32S8. Instanced local-light bounds run a z-fail front/back increment/decrement volume pass, and the additive local-light resolve is rejected outside nonzero stencil. Directional/ambient lighting remains a single full-screen pass. |
 | Noiseless shadow projection plus contact detail | Live + Reference | Cached raster shadow maps are combined with material/depth-aware screen-space contact visibility without a noisy temporal dependency. |
 | AO/bent-normal/specular occlusion | Live + Reference | Live lighting derives stable screen-space/contact visibility from resolved D32, normals and material data; material cavity and bent-normal contracts feed specular occlusion. CPU debug views expose the individual terms. |
+| Energy-normalized diffuse and scene-owned environment profiles | Live + Reference | CPU and GPU Burley diffuse use the same `1/pi` convention and restrained sky-hemisphere fill. Sky orientation/exposure, precipitation, wetness, wind, and exposure defaults live on `RenderScene`, so dry Dust2 and rainy monsoon rendering do not depend on hard-coded global shader weather. |
 | Probe/RSM world-space GI | Reference / architecture only | The CPU renderer has probe-like indirect response and the graph no longer pretends a separate live GPU probe pass exists. A live RSM/probe streaming system is not implemented. |
 
 ## Reflections, atmosphere, and post
@@ -58,7 +60,7 @@ Status definitions:
 | Diffuse-only exposure, bounded white balance, artist compensation, temporal adaptation | Live | Ping-pong 1x1 exposure history uses diffuse illuminance from HDR alpha, artist min/max/EV/balance controls, separate brighten/darken rates, and measured frame rate. |
 | GT toe/linear/shoulder mapping and Kawase bloom after velocity compensation | Live + Reference | Bloom extracts from the velocity-compensated HDR scene and the GT resolve merges bloom, fog, exposure, white balance, and camera effects. |
 | Single-direction depth-aware velocity compensation with separable smoothing | Live | Native-resolution motion/depth reconstruction uses a near-field camera cutoff, extreme-motion fallback, one-sided uniform samples, foreground rejection, and a separate perpendicular smoothing pass. Artist controls are CLI-exposed. |
-| Half-resolution composite effects | Live | A dedicated half-resolution RGBA16 camera-effects target produces light-reactive lens rain/refraction and is bilinearly composed in the tone-map pass. |
+| Rain presentation | Live | Depth-tested world-space rain keeps the original drop density across the expanded Dust II volume. Screen-space lens drops are deliberately excluded because they obscure the scene and duplicate the HDR image during composition. |
 | Separate UI target and gamma-correct presentation | Live | SMAA writes an intermediate scene target; UI writes a separate linear RGBA8 target; the final pass composites premultiplied UI and applies user `--display-gamma`/`--display-brightness`. UI never contaminates temporal history. |
 | Depth of field | Research | The transcript says DoF still needs work and supplies no validated tuning/quality policy. No placeholder blur is mislabeled as completion. |
 | 64-pixel 3D LUT and BT.2020 experiments | Research | The source asks for later format/color-space experiments; the SDR path does not claim them. |

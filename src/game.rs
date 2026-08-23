@@ -1,4 +1,5 @@
 use crate::asset_pipeline::{AssetPipeline, ImportReport};
+use crate::cloth::ClothError;
 use crate::math::{Vec2, Vec3};
 use crate::profiler::{EngineProfiler, FrameReport};
 use crate::quality::QualityTier;
@@ -88,12 +89,19 @@ impl EngineFrame {
 #[derive(Debug)]
 pub enum EngineError {
     Render(RenderError),
+    Cloth(ClothError),
     NoSceneLoaded,
 }
 
 impl From<RenderError> for EngineError {
     fn from(value: RenderError) -> Self {
         Self::Render(value)
+    }
+}
+
+impl From<ClothError> for EngineError {
+    fn from(value: ClothError) -> Self {
+        Self::Cloth(value)
     }
 }
 
@@ -152,7 +160,7 @@ impl GameEngine {
         self.accumulator += delta;
         let mut fixed_ticks = 0;
         while self.accumulator >= self.settings.fixed_timestep {
-            self.world.fixed_update(self.settings.fixed_timestep);
+            self.world.fixed_update(self.settings.fixed_timestep)?;
             self.accumulator -= self.settings.fixed_timestep;
             fixed_ticks += 1;
         }

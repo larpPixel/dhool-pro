@@ -67,7 +67,7 @@ cp "$staging/maps/de_dust2/world_physics_physics.glb" \
     --texture_decode_flags ForceLDR \
     --threads "$threads" \
     -e vmat_c,vtex_c \
-    -f materials/skybox/sky_de_dust2) || true
+    -f materials/skybox/sky_de_dust2)
 rm -f "$sky_staging/exceptions.txt"
 
 if [ -f "$sky_staging/materials/skybox/sky_de_dust2.vmat" ]; then
@@ -75,12 +75,23 @@ if [ -f "$sky_staging/materials/skybox/sky_de_dust2.vmat" ]; then
 fi
 if [ -f "$sky_staging/materials/skybox/sky_de_dust2.exr" ]; then
     cp "$sky_staging/materials/skybox/sky_de_dust2.exr" "$output/materials/skybox/"
-	if command -v magick >/dev/null 2>&1; then
-		magick "$sky_staging/materials/skybox/sky_de_dust2.exr" \
-			-resize 2048x1024 -colorspace sRGB -alpha off \
-			"$output/materials/skybox/sky_de_dust2.png"
-	fi
+	command -v magick >/dev/null 2>&1 || {
+		echo "ImageMagick is required to convert the Dust2 skybox" >&2
+		exit 1
+	}
+	magick "$sky_staging/materials/skybox/sky_de_dust2.exr" \
+		-resize 2048x1024 -colorspace sRGB -alpha off \
+		"$output/materials/skybox/sky_de_dust2.png"
 fi
+
+test -s "$output/materials/skybox/sky_de_dust2.vmat" || {
+	echo "Dust2 skybox material export is missing" >&2
+	exit 1
+}
+test -s "$output/materials/skybox/sky_de_dust2.png" || {
+	echo "Dust2 skybox panorama export is missing" >&2
+	exit 1
+}
 
 visual_sha256=$(sha256sum "$output/maps/de_dust2.glb" | cut -d ' ' -f 1)
 physics_sha256=$(sha256sum "$output/maps/de_dust2/world_physics_physics.glb" | cut -d ' ' -f 1)

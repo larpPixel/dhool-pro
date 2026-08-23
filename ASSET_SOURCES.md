@@ -43,8 +43,9 @@ user's licensed Counter-Strike 2 install:
 The generated CS2-derived output is intentionally ignored by git and is not
 redistributed by this project. The runtime Dust2 loader uses the visual GLB,
 loads exported albedo textures at a capped in-memory resolution, filters Source
-2 tool/clip meshes, adds a converted Dust2 skybox shell when present, and keeps
-the old physics export only as a fallback.
+2 tool/clip meshes, binds the converted Dust2 panorama as its live sky when
+present, and keeps the old physics export only as a fallback. The procedural
+Dust2 cloth awning is generated from engine geometry and uses no external asset.
 
 ## Generated City Decals
 

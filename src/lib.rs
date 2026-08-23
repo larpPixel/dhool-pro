@@ -3,6 +3,7 @@
 pub mod asset;
 pub mod asset_pipeline;
 pub mod backend;
+pub mod cloth;
 pub mod demo;
 pub mod game;
 pub mod gltf_import;
@@ -22,6 +23,9 @@ pub use asset::{
 };
 pub use asset_pipeline::{AssetId, AssetPipeline, ImportReport, ImportSeverity, ImportedAsset};
 pub use backend::{BackendApi, BackendCapabilities};
+pub use cloth::{
+    ClothColliderSnapshot, ClothDefinition, ClothError, ClothPin, ClothSettings, ClothState,
+};
 pub use demo::{export_demo_gallery, DemoSummary};
 pub use game::{
     build_better_than_unity_unreal_demo, EngineFrame, FrameInput, GameEngine, InputState,
@@ -34,7 +38,7 @@ pub use profiler::{required_debug_views, EngineProfiler, FrameBudget, FrameRepor
 pub use quality::QualityTier;
 pub use renderer::{CpuRenderer, DebugView, RenderConfig, RenderOutput, RenderPath};
 pub use scene::{
-    build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene, Camera, Light,
-    Material, Mesh, RenderScene, TextureImage,
+    build_aaa_scene, build_asset_showcase, build_demo_scene, build_dust2_scene, Camera,
+    EnvironmentProfile, ExposureProfile, Light, Material, Mesh, RenderScene, TextureImage,
 };
 pub use world::{CameraRig, EntityId, MeshRenderer, RigidBody, Transform, World};

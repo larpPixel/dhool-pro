@@ -1,3 +1,4 @@
+use crate::cloth::{ClothColliderSnapshot, ClothState};
 use crate::math::{Vec3, Vec4};
 use crate::scene::{
     build_aaa_scene, build_asset_showcase, build_dust2_scene, LightKind, Material, RenderScene,
@@ -42,7 +43,8 @@ const CAMERA_LOOK_SPEED: f32 = 1.55;
 const CAMERA_MOUSE_LOOK_SPEED: f32 = 0.0025;
 const GENERATED_RAIN_STREAK_DETAIL: &str = "assets/aaa/rain/generated_streak_detail.png";
 const DUST2_SKYBOX_TEXTURE: &str = "assets/dust2/generated/cs2/materials/skybox/sky_de_dust2.png";
-const RAIN_DROP_COUNT: u32 = 4_096;
+// Keep the expanded Dust II precipitation volume at the original rain density.
+const RAIN_DROP_COUNT: u32 = 32_768;
 const RAIN_PRISM_VERTEX_COUNT: u32 = 36;
 const MAX_GPU_POINT_LIGHTS: usize = 6;
 const MAX_REFLECTION_PROXIES: usize = 24;
@@ -59,7 +61,7 @@ const GPU_STAGE_NAMES: [&str; 6] = [
     "cached shadows",
     "geometry + 2x resolve",
     "visibility + reflections + lighting",
-    "velocity + composite + bloom + tonemap",
+    "velocity + bloom + tonemap",
     "SMAA T2x",
     "UI + gamma presentation",
 ];
@@ -72,15 +74,16 @@ pub struct LiveOptions {
     pub width: u32,
     pub height: u32,
     pub capture_path: Option<PathBuf>,
-    pub exposure_min: f32,
-    pub exposure_max: f32,
-    pub exposure_compensation: f32,
-    pub white_balance_strength: f32,
+    pub exposure_min: Option<f32>,
+    pub exposure_max: Option<f32>,
+    pub exposure_compensation: Option<f32>,
+    pub white_balance_strength: Option<f32>,
     pub velocity_compensation_strength: f32,
     pub camera_velocity_cutoff: f32,
     pub display_gamma: f32,
     pub display_brightness: f32,
     pub profile_gpu: bool,
+    pub static_camera: bool,
 }
 
 pub fn run_live_renderer(options: LiveOptions) -> Result<(), LiveError> {
@@ -185,7 +188,7 @@ impl ApplicationHandler for LiveApplication {
             renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type
         );
         println!(
-            "live pipeline: alpha-aware cached shadows -> 2x MSAA selective prepass/PBR+motion G-buffer + coverage resolve -> R32 depth/Hi-Z/fog -> SSR-first temporal reflections -> D32S8 light volumes + material-profile HDR lighting/rain -> velocity compensation + half-res composites + Kawase bloom/GT resolve -> coverage-assisted SMAA T2x -> separate UI/gamma presentation"
+            "live pipeline: alpha-aware cached shadows -> 2x MSAA selective prepass/PBR+motion G-buffer + coverage resolve -> R32 depth/Hi-Z/fog -> SSR-first temporal reflections -> D32S8 light volumes + material-profile HDR lighting/rain -> velocity compensation + Kawase bloom/GT resolve -> coverage-assisted SMAA T2x -> separate UI/gamma presentation"
         );
         window.set_title(&format!(
             "Dhool Pro | {} | vendor-agnostic compute",
@@ -245,7 +248,10 @@ impl ApplicationHandler for LiveApplication {
                 let Some(renderer) = self.renderer.as_mut() else {
                     return;
                 };
-                renderer.update();
+                if let Err(message) = renderer.update() {
+                    self.fail(event_loop, LiveError::Scene(message));
+                    return;
+                }
                 match renderer.render() {
                     RenderResult::Presented => {
                         self.frame_count += 1;
@@ -336,6 +342,24 @@ impl GpuVertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct GpuPreviousPosition {
+    position: [f32; 3],
+}
+
+impl GpuPreviousPosition {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![5 => Float32x3];
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct CameraUniform {
     view_projection: [[f32; 4]; 4],
     inverse_view_projection: [[f32; 4]; 4],
@@ -374,6 +398,32 @@ struct ExposureUniform {
     adaptation_speeds: [f32; 4],
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ExposureOverrides {
+    min: Option<f32>,
+    max: Option<f32>,
+    compensation: Option<f32>,
+    white_balance_strength: Option<f32>,
+}
+
+impl ExposureOverrides {
+    fn resolve(self, profile: crate::scene::ExposureProfile) -> ExposureUniform {
+        let min = self.min.unwrap_or(profile.min).max(0.01);
+        let max = self.max.unwrap_or(profile.max).max(min);
+        ExposureUniform {
+            limits_compensation_balance: [
+                min,
+                max,
+                self.compensation.unwrap_or(profile.compensation),
+                self.white_balance_strength
+                    .unwrap_or(profile.white_balance_strength)
+                    .clamp(0.0, 1.0),
+            ],
+            adaptation_speeds: [2.4, 1.1, 0.0, 0.0],
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct VelocityCompensationUniform {
@@ -387,23 +437,21 @@ struct DisplayUniform {
 }
 
 struct LiveRendererConfig {
-    exposure: ExposureUniform,
+    exposure: ExposureOverrides,
     velocity_compensation: VelocityCompensationUniform,
     display: DisplayUniform,
     profile_gpu: bool,
+    static_camera: bool,
 }
 
 impl LiveRendererConfig {
     fn from_options(options: &LiveOptions) -> Self {
         Self {
-            exposure: ExposureUniform {
-                limits_compensation_balance: [
-                    options.exposure_min.max(0.01),
-                    options.exposure_max.max(options.exposure_min.max(0.01)),
-                    options.exposure_compensation,
-                    options.white_balance_strength.clamp(0.0, 1.0),
-                ],
-                adaptation_speeds: [2.4, 1.1, 0.0, 0.0],
+            exposure: ExposureOverrides {
+                min: options.exposure_min,
+                max: options.exposure_max,
+                compensation: options.exposure_compensation,
+                white_balance_strength: options.white_balance_strength,
             },
             velocity_compensation: VelocityCompensationUniform {
                 params: [
@@ -422,6 +470,7 @@ impl LiveRendererConfig {
                 ],
             },
             profile_gpu: options.profile_gpu,
+            static_camera: options.static_camera,
         }
     }
 }
@@ -473,6 +522,7 @@ struct LightUniform {
     ambient: [f32; 4],
     sky: [f32; 4],
     weather: [f32; 4],
+    environment: [f32; 4],
     local_position_radius: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
     local_color_intensity: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
     local_direction_outer: [[f32; 4]; MAX_GPU_POINT_LIGHTS],
@@ -498,7 +548,18 @@ impl LightUniform {
                 1.0,
             ],
             sky: [scene.sky_color.r, scene.sky_color.g, scene.sky_color.b, 1.0],
-            weather: [1.0, 1.0, 0.18, 0.0],
+            weather: [
+                scene.environment.precipitation,
+                scene.environment.surface_wetness,
+                scene.environment.wind,
+                0.0,
+            ],
+            environment: [
+                scene.environment.sky_exposure_ev,
+                scene.environment.sky_yaw_radians,
+                0.0,
+                0.0,
+            ],
             ..Self::zeroed()
         };
         let mut local_count = 0_usize;
@@ -560,15 +621,20 @@ impl LightUniform {
     }
 
     fn realtime(mut self, elapsed: f32) -> Self {
-        self.weather = [1.0, 1.0, 0.18 + elapsed.sin() * 0.025, elapsed];
-        let moon_flicker = 0.96 + (elapsed * 0.17).sin() * 0.025;
-        self.directional_color_intensity[3] *= moon_flicker;
-        let local_count =
-            self.directional_direction_count[3].clamp(0.0, MAX_GPU_POINT_LIGHTS as f32) as usize;
-        for light_index in 0..local_count {
-            let phase = elapsed * (7.0 + light_index as f32 * 2.35) + light_index as f32 * 1.71;
-            let flicker = 0.88 + phase.sin() * 0.08 + (phase * 2.13).sin() * 0.035;
-            self.local_color_intensity[light_index][3] *= flicker.clamp(0.72, 1.12);
+        self.weather[2] += elapsed.sin() * 0.025;
+        self.weather[3] = elapsed;
+        if self.weather[0] > 0.01 {
+            let moon_flicker = 0.96 + (elapsed * 0.17).sin() * 0.025;
+            self.directional_color_intensity[3] *= moon_flicker;
+        }
+        if self.weather[0] > 0.01 {
+            let local_count = self.directional_direction_count[3]
+                .clamp(0.0, MAX_GPU_POINT_LIGHTS as f32) as usize;
+            for light_index in 0..local_count {
+                let phase = elapsed * (7.0 + light_index as f32 * 2.35) + light_index as f32 * 1.71;
+                let flicker = 0.88 + phase.sin() * 0.08 + (phase * 2.13).sin() * 0.035;
+                self.local_color_intensity[light_index][3] *= flicker.clamp(0.72, 1.12);
+            }
         }
         self
     }
@@ -736,7 +802,6 @@ struct GBuffer {
     _lighting_hdr: wgpu::Texture,
     _velocity_compensation_a: wgpu::Texture,
     _velocity_compensation_b: wgpu::Texture,
-    _composite_effects: wgpu::Texture,
     _exposure_white_balance_a: wgpu::Texture,
     _exposure_white_balance_b: wgpu::Texture,
     _bloom_a: wgpu::Texture,
@@ -770,7 +835,6 @@ struct GBuffer {
     lighting_hdr: wgpu::TextureView,
     velocity_compensation_a: wgpu::TextureView,
     velocity_compensation_b: wgpu::TextureView,
-    composite_effects: wgpu::TextureView,
     exposure_white_balance_bind_group_a: wgpu::BindGroup,
     exposure_white_balance_bind_group_b: wgpu::BindGroup,
     bloom_a: wgpu::TextureView,
@@ -790,7 +854,6 @@ struct GBuffer {
     gbuffer_resolve_bind_group: wgpu::BindGroup,
     velocity_compensation_bind_group: wgpu::BindGroup,
     velocity_smoothing_bind_group: wgpu::BindGroup,
-    composite_effects_bind_group: wgpu::BindGroup,
     bloom_extract_bind_group: wgpu::BindGroup,
     bloom_blur_a_bind_group: wgpu::BindGroup,
     bloom_blur_b_bind_group: wgpu::BindGroup,
@@ -824,6 +887,7 @@ struct GpuRenderer {
     size: PhysicalSize<u32>,
     adapter: wgpu::AdapterInfo,
     vertex_buffer: wgpu::Buffer,
+    previous_position_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     batches: Vec<DrawBatch>,
     materials: Vec<GpuMaterial>,
@@ -866,7 +930,6 @@ struct GpuRenderer {
     local_lighting_pipeline: wgpu::RenderPipeline,
     velocity_compensation_pipeline: wgpu::RenderPipeline,
     velocity_smoothing_pipeline: wgpu::RenderPipeline,
-    composite_effects_pipeline: wgpu::RenderPipeline,
     auto_exposure_pipeline: wgpu::ComputePipeline,
     bloom_extract_pipeline: wgpu::RenderPipeline,
     bloom_blur_horizontal_pipeline: wgpu::RenderPipeline,
@@ -884,7 +947,6 @@ struct GpuRenderer {
     lighting_layout: wgpu::BindGroupLayout,
     light_volume_layout: wgpu::BindGroupLayout,
     velocity_compensation_layout: wgpu::BindGroupLayout,
-    composite_effects_layout: wgpu::BindGroupLayout,
     auto_exposure_layout: wgpu::BindGroupLayout,
     bloom_layout: wgpu::BindGroupLayout,
     tonemap_layout: wgpu::BindGroupLayout,
@@ -916,8 +978,17 @@ struct GpuRenderer {
     local_light_count: u32,
     skybox_texture: TextureImage,
     display_fps: f32,
+    show_ui: bool,
     frame_capture: Option<FrameCapture>,
     gpu_profiler: Option<GpuTimestampProfiler>,
+    cloths: Vec<LiveCloth>,
+    cloth_accumulator: f32,
+}
+
+struct LiveCloth {
+    state: ClothState,
+    mesh: crate::scene::Mesh,
+    vertex_range: Range<u32>,
 }
 
 enum RenderResult {
@@ -962,13 +1033,20 @@ impl GpuRenderer {
             velocity_compensation,
             display,
             profile_gpu,
+            static_camera,
         } = renderer_config;
-        let scene = match map.as_deref() {
+        let mut scene = match map.as_deref() {
             Some("dust2") => build_dust2_scene(PathBuf::from("assets/dust2")),
             _ if asset.is_dir() => build_aaa_scene(&asset),
             _ => build_asset_showcase(&asset),
         }
         .map_err(|error| LiveError::Scene(error.to_string()))?;
+        for mesh in &mut scene.meshes {
+            if mesh.cloth.is_some() {
+                mesh.bake_transform();
+            }
+        }
+        let exposure = exposure.resolve(scene.environment.exposure);
         let camera_origin = GpuVec3::new(
             scene.camera.position.x,
             scene.camera.position.y,
@@ -1051,7 +1129,6 @@ impl GpuRenderer {
         let lighting_layout = lighting_layout(&device);
         let light_volume_layout = light_volume_layout(&device);
         let velocity_compensation_layout = velocity_compensation_layout(&device);
-        let composite_effects_layout = composite_effects_layout(&device);
         let auto_exposure_layout = auto_exposure_layout(&device);
         let bloom_layout = bloom_layout(&device);
         let tonemap_layout = tonemap_layout(&device);
@@ -1089,7 +1166,32 @@ impl GpuRenderer {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
-        let (vertices, indices, batches) = flatten_scene(&scene);
+        let FlattenedScene {
+            vertices,
+            previous_positions,
+            indices,
+            batches,
+            cloth_vertex_ranges,
+        } = flatten_scene(&scene);
+        let cloths = scene
+            .meshes
+            .iter()
+            .zip(cloth_vertex_ranges)
+            .filter_map(|(mesh, vertex_range)| {
+                let definition = mesh.cloth.as_ref()?;
+                let vertex_range = vertex_range?;
+                Some(
+                    ClothState::new(&mesh.vertices, &mesh.indices, definition).map(|state| {
+                        LiveCloth {
+                            state,
+                            mesh: mesh.clone(),
+                            vertex_range,
+                        }
+                    }),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| LiveError::Scene(error.to_string()))?;
         let light_uniform = LightUniform::from_scene(&scene);
         let local_light_count = light_uniform.directional_direction_count[3]
             .clamp(0.0, MAX_GPU_POINT_LIGHTS as f32) as u32;
@@ -1174,8 +1276,14 @@ impl GpuRenderer {
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene-vertices"),
             contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
+        let previous_position_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("scene-previous-positions"),
+                contents: bytemuck::cast_slice(&previous_positions),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene-indices"),
             contents: bytemuck::cast_slice(&indices),
@@ -1244,8 +1352,6 @@ impl GpuRenderer {
             &velocity_compensation_layout,
             "fs_smooth",
         );
-        let composite_effects_pipeline =
-            create_composite_effects_pipeline(&device, &composite_effects_layout);
         let auto_exposure_pipeline = create_auto_exposure_pipeline(&device, &auto_exposure_layout);
         let bloom_extract_pipeline =
             create_bloom_pipeline(&device, &bloom_layout, bloom_format, "fs_extract");
@@ -1272,7 +1378,6 @@ impl GpuRenderer {
             &lighting_layout,
             &light_volume_layout,
             &velocity_compensation_layout,
-            &composite_effects_layout,
             &auto_exposure_layout,
             &bloom_layout,
             &tonemap_layout,
@@ -1310,6 +1415,7 @@ impl GpuRenderer {
             size,
             adapter: adapter_info,
             vertex_buffer,
+            previous_position_buffer,
             index_buffer,
             batches,
             materials,
@@ -1352,7 +1458,6 @@ impl GpuRenderer {
             local_lighting_pipeline,
             velocity_compensation_pipeline,
             velocity_smoothing_pipeline,
-            composite_effects_pipeline,
             auto_exposure_pipeline,
             bloom_extract_pipeline,
             bloom_blur_horizontal_pipeline,
@@ -1370,7 +1475,6 @@ impl GpuRenderer {
             lighting_layout,
             light_volume_layout,
             velocity_compensation_layout,
-            composite_effects_layout,
             auto_exposure_layout,
             bloom_layout,
             tonemap_layout,
@@ -1390,7 +1494,7 @@ impl GpuRenderer {
             frame_index: 0,
             current_view_projection: Mat4::IDENTITY,
             previous_view_projection: Mat4::IDENTITY,
-            auto_orbit: true,
+            auto_orbit: !static_camera,
             camera_origin,
             camera_target,
             camera_fov_y,
@@ -1402,11 +1506,14 @@ impl GpuRenderer {
             local_light_count,
             skybox_texture,
             display_fps: 0.0,
+            show_ui: capture_path.is_none(),
             frame_capture: capture_path.map(|path| FrameCapture {
                 path,
                 written: false,
             }),
             gpu_profiler,
+            cloths,
+            cloth_accumulator: 0.0,
         })
     }
 
@@ -1430,7 +1537,6 @@ impl GpuRenderer {
             &self.lighting_layout,
             &self.light_volume_layout,
             &self.velocity_compensation_layout,
-            &self.composite_effects_layout,
             &self.auto_exposure_layout,
             &self.bloom_layout,
             &self.tonemap_layout,
@@ -1574,7 +1680,7 @@ impl GpuRenderer {
         );
     }
 
-    fn update(&mut self) {
+    fn update(&mut self) -> Result<(), String> {
         let now = Instant::now();
         let dt = now
             .duration_since(self.last_update)
@@ -1590,6 +1696,7 @@ impl GpuRenderer {
             };
         }
         let elapsed = self.started.elapsed().as_secs_f32();
+        self.update_cloth(dt)?;
         self.apply_manual_camera(dt);
         let (eye, target) = self.camera_pose(elapsed);
         let view = Mat4::look_at_rh(eye, target, GpuVec3::Y);
@@ -1647,6 +1754,65 @@ impl GpuRenderer {
             .write_buffer(&self.aa_buffer, 0, bytemuck::bytes_of(&aa));
         self.queue
             .write_buffer(&self.light_buffer, 0, bytemuck::bytes_of(&lights));
+        Ok(())
+    }
+
+    fn update_cloth(&mut self, dt: f32) -> Result<(), String> {
+        const CLOTH_TIMESTEP: f32 = 1.0 / 60.0;
+        self.cloth_accumulator = (self.cloth_accumulator + dt).min(CLOTH_TIMESTEP * 4.0);
+        let mut stepped = false;
+        while self.cloth_accumulator >= CLOTH_TIMESTEP {
+            for cloth in &mut self.cloths {
+                cloth
+                    .state
+                    .step(
+                        CLOTH_TIMESTEP,
+                        &[ClothColliderSnapshot::floor(-0.8)],
+                        &mut cloth.mesh.vertices,
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            self.cloth_accumulator -= CLOTH_TIMESTEP;
+            stepped = true;
+        }
+        if !stepped {
+            return Ok(());
+        }
+
+        let vertex_stride = std::mem::size_of::<GpuVertex>() as u64;
+        let previous_position_stride = std::mem::size_of::<GpuPreviousPosition>() as u64;
+        let mut invalidates_shadow_cache = false;
+        for cloth in &self.cloths {
+            let vertices: Vec<_> = cloth
+                .mesh
+                .vertices
+                .iter()
+                .map(|vertex| gpu_vertex(&cloth.mesh, vertex))
+                .collect();
+            let previous_positions: Vec<_> = cloth
+                .mesh
+                .vertices
+                .iter()
+                .map(|vertex| gpu_previous_position(&cloth.mesh, vertex))
+                .collect();
+            self.queue.write_buffer(
+                &self.vertex_buffer,
+                cloth.vertex_range.start as u64 * vertex_stride,
+                bytemuck::cast_slice(&vertices),
+            );
+            self.queue.write_buffer(
+                &self.previous_position_buffer,
+                cloth.vertex_range.start as u64 * previous_position_stride,
+                bytemuck::cast_slice(&previous_positions),
+            );
+            invalidates_shadow_cache |=
+                cloth.mesh.shadow_class != crate::asset::ShadowCasterClass::None;
+        }
+        if invalidates_shadow_cache {
+            self.shadow_cache_ready = false;
+            self.local_shadow_cache_ready.fill(false);
+        }
+        Ok(())
     }
 
     fn render(&mut self) -> RenderResult {
@@ -1832,6 +1998,7 @@ impl GpuRenderer {
             pass.set_pipeline(&self.geometry_pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_vertex_buffer(1, self.previous_position_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             // Alpha-tested geometry contributes coverage first without paying
             // for a duplicate alpha prepass. Remaining opaque geometry then
@@ -2119,24 +2286,6 @@ impl GpuRenderer {
         }
 
         {
-            let color_attachments = [color_attachment(
-                &self.gbuffer.composite_effects,
-                wgpu::Color::TRANSPARENT,
-            )];
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("half-resolution-camera-composite-effects"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.composite_effects_pipeline);
-            pass.set_bind_group(0, &self.gbuffer.composite_effects_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        {
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &self.gbuffer.bloom_a,
                 depth_slice: None,
@@ -2317,7 +2466,10 @@ impl GpuRenderer {
         }
 
         {
-            let color_attachments = [load_color_attachment(&self.gbuffer.ui_overlay)];
+            let color_attachments = [color_attachment(
+                &self.gbuffer.ui_overlay,
+                wgpu::Color::TRANSPARENT,
+            )];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("separate-linear-ui-overlay"),
                 color_attachments: &color_attachments,
@@ -2326,9 +2478,11 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.ui_pipeline);
-            pass.set_bind_group(0, &self.gbuffer.ui_bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            if self.show_ui {
+                pass.set_pipeline(&self.ui_pipeline);
+                pass.set_bind_group(0, &self.gbuffer.ui_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
 
         {
@@ -2612,7 +2766,6 @@ impl GBuffer {
         lighting_layout: &wgpu::BindGroupLayout,
         light_volume_layout: &wgpu::BindGroupLayout,
         velocity_compensation_layout: &wgpu::BindGroupLayout,
-        composite_effects_layout: &wgpu::BindGroupLayout,
         auto_exposure_layout: &wgpu::BindGroupLayout,
         bloom_layout: &wgpu::BindGroupLayout,
         tonemap_layout: &wgpu::BindGroupLayout,
@@ -2732,15 +2885,6 @@ impl GBuffer {
             "separable-velocity-compensation-b",
             width,
             height,
-            HDR_FORMAT,
-        );
-        let composite_width = width.div_ceil(2).max(1);
-        let composite_height = height.div_ceil(2).max(1);
-        let (composite_texture, composite_effects) = render_texture(
-            device,
-            "half-resolution-camera-composite-effects",
-            composite_width,
-            composite_height,
             HDR_FORMAT,
         );
         let (exposure_texture_a, exposure_white_balance_a) = storage_texture(
@@ -3040,22 +3184,6 @@ impl GBuffer {
                 },
             ],
         });
-        let composite_effects_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("half-resolution-camera-composite-effects-bind-group"),
-            layout: composite_effects_layout,
-            entries: &[
-                texture_entry(0, &velocity_compensation_b),
-                texture_entry(1, &depth_copy),
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: frame_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: light_buffer.as_entire_binding(),
-                },
-            ],
-        });
         let exposure_white_balance_bind_group_a =
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("auto-exposure-white-balance-history-a-to-b"),
@@ -3118,7 +3246,6 @@ impl GBuffer {
                 texture_entry(1, &bloom_a),
                 texture_entry(2, &volumetric_fog),
                 texture_entry(3, &exposure_white_balance_a),
-                texture_entry(4, &composite_effects),
             ],
         });
         let tonemap_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3129,7 +3256,6 @@ impl GBuffer {
                 texture_entry(1, &bloom_a),
                 texture_entry(2, &volumetric_fog),
                 texture_entry(3, &exposure_white_balance_b),
-                texture_entry(4, &composite_effects),
             ],
         });
         let depth_copy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3266,7 +3392,6 @@ impl GBuffer {
             _lighting_hdr: lighting_texture,
             _velocity_compensation_a: velocity_texture_a,
             _velocity_compensation_b: velocity_texture_b,
-            _composite_effects: composite_texture,
             _exposure_white_balance_a: exposure_texture_a,
             _exposure_white_balance_b: exposure_texture_b,
             _bloom_a: bloom_texture_a,
@@ -3300,7 +3425,6 @@ impl GBuffer {
             lighting_hdr,
             velocity_compensation_a,
             velocity_compensation_b,
-            composite_effects,
             exposure_white_balance_bind_group_a,
             exposure_white_balance_bind_group_b,
             bloom_a,
@@ -3320,7 +3444,6 @@ impl GBuffer {
             gbuffer_resolve_bind_group,
             velocity_compensation_bind_group,
             velocity_smoothing_bind_group,
-            composite_effects_bind_group,
             bloom_extract_bind_group,
             bloom_blur_a_bind_group,
             bloom_blur_b_bind_group,
@@ -3379,17 +3502,27 @@ async fn select_adapter(
         .map_err(|_| LiveError::AdapterUnavailable)
 }
 
-fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
+struct FlattenedScene {
+    vertices: Vec<GpuVertex>,
+    previous_positions: Vec<GpuPreviousPosition>,
+    indices: Vec<u32>,
+    batches: Vec<DrawBatch>,
+    cloth_vertex_ranges: Vec<Option<Range<u32>>>,
+}
+
+fn flatten_scene(scene: &RenderScene) -> FlattenedScene {
     let mut vertices = Vec::new();
+    let mut previous_positions = Vec::new();
     let mut indices = Vec::new();
     let mut batches = Vec::new();
-    let mut meshes: Vec<_> = scene.meshes.iter().collect();
+    let mut cloth_vertex_ranges = vec![None; scene.meshes.len()];
+    let mut meshes: Vec<_> = scene.meshes.iter().enumerate().collect();
     let camera_position = GpuVec3::new(
         scene.camera.position.x,
         scene.camera.position.y,
         scene.camera.position.z,
     );
-    meshes.sort_by(|left, right| {
+    meshes.sort_by(|(_, left), (_, right)| {
         let classify = |mesh: &crate::scene::Mesh| {
             let material = &scene.materials[mesh.material_index];
             let alpha_tested = material.flags.alpha_tested;
@@ -3418,7 +3551,7 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
             .then_with(|| left.material_index.cmp(&right.material_index))
     });
     let mut active_batch: Option<(usize, bool, bool, bool, u32)> = None;
-    for mesh in meshes {
+    for (scene_mesh_index, mesh) in meshes {
         let material = &scene.materials[mesh.material_index];
         let alpha_tested = material.flags.alpha_tested;
         let prepass_eligible = mesh.prepass_eligible && !material.flags.alpha_tested;
@@ -3466,38 +3599,8 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
 
         let base_vertex = vertices.len() as u32;
         for vertex in &mesh.vertices {
-            let position = mesh.transform.mul_vec4(Vec4::new(
-                vertex.position.x,
-                vertex.position.y,
-                vertex.position.z,
-                1.0,
-            ));
-            let normal = mesh.transform.mul_vec4(Vec4::new(
-                vertex.normal.x,
-                vertex.normal.y,
-                vertex.normal.z,
-                0.0,
-            ));
-            let normal = Vec3::new(normal.x, normal.y, normal.z).normalize_or_zero();
-            let tangent = mesh.transform.mul_vec4(Vec4::new(
-                vertex.tangent.x,
-                vertex.tangent.y,
-                vertex.tangent.z,
-                0.0,
-            ));
-            let tangent = Vec3::new(tangent.x, tangent.y, tangent.z).normalize_or_zero();
-            vertices.push(GpuVertex {
-                position: [position.x, position.y, position.z],
-                normal: [normal.x, normal.y, normal.z],
-                uv: [vertex.uv.x, vertex.uv.y],
-                color: [
-                    color_channel_to_unorm8(vertex.color.r),
-                    color_channel_to_unorm8(vertex.color.g),
-                    color_channel_to_unorm8(vertex.color.b),
-                    color_channel_to_unorm8(vertex.color.a),
-                ],
-                tangent: [tangent.x, tangent.y, tangent.z, vertex.tangent_sign],
-            });
+            vertices.push(gpu_vertex(mesh, vertex));
+            previous_positions.push(gpu_previous_position(mesh, vertex));
         }
         for triangle in &mesh.indices {
             indices.extend([
@@ -3505,6 +3608,9 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
                 triangle[1] + base_vertex,
                 triangle[2] + base_vertex,
             ]);
+        }
+        if mesh.cloth.is_some() {
+            cloth_vertex_ranges[scene_mesh_index] = Some(base_vertex..vertices.len() as u32);
         }
     }
     if let Some((material_index, prepass_eligible, alpha_tested, casts_shadow, first_index)) =
@@ -3518,7 +3624,63 @@ fn flatten_scene(scene: &RenderScene) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatc
             casts_shadow,
         });
     }
-    (vertices, indices, batches)
+    FlattenedScene {
+        vertices,
+        previous_positions,
+        indices,
+        batches,
+        cloth_vertex_ranges,
+    }
+}
+
+fn gpu_vertex(mesh: &crate::scene::Mesh, vertex: &crate::scene::Vertex) -> GpuVertex {
+    let position = mesh.transform.mul_vec4(Vec4::new(
+        vertex.position.x,
+        vertex.position.y,
+        vertex.position.z,
+        1.0,
+    ));
+    let normal = mesh.transform.mul_vec4(Vec4::new(
+        vertex.normal.x,
+        vertex.normal.y,
+        vertex.normal.z,
+        0.0,
+    ));
+    let normal = Vec3::new(normal.x, normal.y, normal.z).normalize_or_zero();
+    let tangent = mesh.transform.mul_vec4(Vec4::new(
+        vertex.tangent.x,
+        vertex.tangent.y,
+        vertex.tangent.z,
+        0.0,
+    ));
+    let tangent = Vec3::new(tangent.x, tangent.y, tangent.z).normalize_or_zero();
+    GpuVertex {
+        position: [position.x, position.y, position.z],
+        normal: [normal.x, normal.y, normal.z],
+        uv: [vertex.uv.x, vertex.uv.y],
+        color: [
+            color_channel_to_unorm8(vertex.color.r),
+            color_channel_to_unorm8(vertex.color.g),
+            color_channel_to_unorm8(vertex.color.b),
+            color_channel_to_unorm8(vertex.color.a),
+        ],
+        tangent: [tangent.x, tangent.y, tangent.z, vertex.tangent_sign],
+    }
+}
+
+fn gpu_previous_position(
+    mesh: &crate::scene::Mesh,
+    vertex: &crate::scene::Vertex,
+) -> GpuPreviousPosition {
+    let position = mesh.transform.mul_vec4(Vec4::new(
+        vertex.previous_position.x,
+        vertex.previous_position.y,
+        vertex.previous_position.z,
+        1.0,
+    ));
+    GpuPreviousPosition {
+        position: [position.x, position.y, position.z],
+    }
 }
 
 fn color_channel_to_unorm8(value: f32) -> u8 {
@@ -4201,7 +4363,7 @@ fn create_geometry_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[GpuVertex::layout()],
+            buffers: &[GpuVertex::layout(), GpuPreviousPosition::layout()],
         },
         primitive: wgpu::PrimitiveState {
             cull_mode: None,
@@ -4633,39 +4795,6 @@ fn create_bloom_pipeline(
     })
 }
 
-fn create_composite_effects_pipeline(
-    device: &wgpu::Device,
-    composite_effects_layout: &wgpu::BindGroupLayout,
-) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/composite_effects.wgsl"));
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("half-resolution-camera-composite-effects-pipeline-layout"),
-        bind_group_layouts: &[Some(composite_effects_layout)],
-        immediate_size: 0,
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("half-resolution-camera-composite-effects-pipeline"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(color_target(HDR_FORMAT))],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
 fn create_tonemap_pipeline(
     device: &wgpu::Device,
     tonemap_layout: &wgpu::BindGroupLayout,
@@ -5077,19 +5206,6 @@ fn tonemap_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             unfiltered_texture_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
             unfiltered_texture_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
             unfiltered_texture_layout_entry(3, wgpu::ShaderStages::FRAGMENT),
-            unfiltered_texture_layout_entry(4, wgpu::ShaderStages::FRAGMENT),
-        ],
-    })
-}
-
-fn composite_effects_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("half-resolution-camera-composite-effects-layout"),
-        entries: &[
-            unfiltered_texture_layout_entry(0, wgpu::ShaderStages::FRAGMENT),
-            unfiltered_texture_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
-            uniform_entry(2, wgpu::ShaderStages::FRAGMENT),
-            uniform_entry(3, wgpu::ShaderStages::FRAGMENT),
         ],
     })
 }
@@ -5648,6 +5764,22 @@ mod tests {
         assert_eq!(uniform.directional_color_intensity[3], 2.4);
         assert_eq!(uniform.local_position_radius[0], [0.9, 1.2, 1.1, 4.0]);
         assert_eq!(uniform.local_color_intensity[0][3], 5.0);
+        assert_eq!(uniform.weather[..2], [1.0, 1.0]);
+        assert_eq!(uniform.environment, [0.0; 4]);
+    }
+
+    #[test]
+    fn dry_environment_does_not_flicker_scene_lights() {
+        let mut scene = crate::scene::build_demo_scene();
+        scene.environment = crate::scene::EnvironmentProfile::dry_daylight(0.765, 0.516);
+        let uniform = LightUniform::from_scene(&scene);
+        let realtime = uniform.realtime(12.5);
+
+        assert_eq!(realtime.weather[0], 0.0);
+        assert_eq!(realtime.weather[1], 0.0);
+        assert_eq!(realtime.directional_color_intensity[3], 2.4);
+        assert_eq!(realtime.local_color_intensity[0][3], 5.0);
+        assert_eq!(realtime.environment[..2], [0.765, 0.516]);
     }
 
     #[test]

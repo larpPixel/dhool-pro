@@ -132,6 +132,12 @@ fn aaa_scene_loads_cc0_pbr_assets() {
         .iter()
         .filter(|mesh| mesh.is_floor_or_ground)
         .all(|mesh| mesh.shadow_class == dhool_pro::asset::ShadowCasterClass::None));
+    assert_eq!(scene.environment.precipitation, 1.0);
+    assert_eq!(scene.environment.surface_wetness, 1.0);
+    assert!(scene
+        .meshes
+        .iter()
+        .any(|mesh| { mesh.name == "monsoon_cloth_validation_awning" && mesh.cloth.is_some() }));
 }
 
 #[test]
@@ -372,6 +378,12 @@ fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
         assert!(scene.camera.far >= 600.0);
         assert!((1.0..=3.0).contains(&scene.camera.position.y));
         assert!(scene.camera.position.z < -30.0);
+        assert_eq!(scene.environment.precipitation, 0.0);
+        assert_eq!(scene.environment.surface_wetness, 0.0);
+        assert!(scene
+            .meshes
+            .iter()
+            .any(|mesh| mesh.name == "dust2_cloth_validation_awning" && mesh.cloth.is_some()));
     } else {
         let import_script =
             std::fs::read_to_string("scripts/import_cs2_dust2.sh").expect("Dust2 import script");
@@ -417,8 +429,17 @@ fn dust2_scene_uses_local_cs2_export_and_long_view_distance() {
     assert!(lighting_source.contains("var skybox: texture_2d"));
     assert!(lighting_source.contains("textureSample(skybox"));
     assert!(lighting_source.contains("atan2(ray.z, ray.x)"));
-    assert!(lighting_source.contains("SOURCE2_DUST2_SKY_EXPOSURE_BIAS"));
-    assert!(lighting_source.contains("DUST2_SKY_YAW_OFFSET"));
+    assert!(lighting_source.contains("exp2(lights.environment.x)"));
+    assert!(lighting_source.contains("lights.environment.y"));
+    assert!(lighting_source.contains("INV_PI"));
+    assert!(lighting_source.contains("sky_hemisphere_irradiance"));
+
+    assert!(gpu_source.contains("scene.environment.precipitation"));
+    assert!(gpu_source.contains("scene.environment.sky_exposure_ev"));
+    assert!(gpu_source.contains("fn update_cloth"));
+    assert!(gpu_source.contains("BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST"));
+    assert!(gpu_source.contains("scene-previous-positions"));
+    assert!(gpu_source.contains("GpuPreviousPosition::layout()"));
 
     let main_source = std::fs::read_to_string("src/main.rs").expect("main source");
     assert!(main_source.contains("normalize_live_locale_for_xkb"));
@@ -709,12 +730,13 @@ fn live_rain_uses_volumetric_prism_geometry() {
     let gpu = include_str!("../src/gpu.rs");
     let rain_shader = include_str!("../src/shaders/rain3d.wgsl");
 
-    assert!(gpu.contains("RAIN_DROP_COUNT: u32 = 4_096"));
+    assert!(gpu.contains("RAIN_DROP_COUNT: u32 = 32_768"));
     assert!(gpu.contains("wgpu::PrimitiveTopology::TriangleList"));
     assert!(gpu.contains("pass.draw(0..RAIN_PRISM_VERTEX_COUNT, 0..RAIN_DROP_COUNT)"));
     assert!(rain_shader.contains("fn prism_local_vertex"));
     assert!(rain_shader.contains("@location(5) surface_normal"));
     assert!(!rain_shader.contains("to_camera"));
+    assert!(!gpu.contains("half-resolution-camera-composite-effects"));
 }
 
 #[test]
@@ -789,7 +811,9 @@ fn live_lighting_uses_real_local_shadows_and_post_bloom() {
     assert!(gpu.contains("diffuse-luminance-auto-exposure-white-balance"));
     assert!(exposure_shader.contains("texture_storage_2d<rgba16float, write>"));
     assert!(exposure_shader.contains("0.18 * compensation / max(geometric_mean"));
-    assert!(exposure_shader.contains("vec3<f32>(0.78)"));
+    assert!(exposure_shader.contains("lights.ambient.rgb + lights.sky.rgb * 0.35"));
+    assert!(exposure_shader.contains("vec3<f32>(0.92)"));
+    assert!(exposure_shader.contains("vec3<f32>(1.08)"));
     assert!(tonemap_shader.contains("exposure_white_balance"));
 }
 

@@ -1,10 +1,11 @@
 use crate::asset::ShadowCasterClass;
+use crate::cloth::{ClothColliderSnapshot, ClothDefinition, ClothError, ClothState};
 use crate::math::{Color, Mat4, Vec3};
-use crate::scene::{Camera, Light, LightKind, Material, Mesh, RenderScene};
+use crate::scene::{Camera, EnvironmentProfile, Light, LightKind, Material, Mesh, RenderScene};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EntityId {
     index: u32,
     generation: u32,
@@ -138,11 +139,13 @@ pub struct World {
     cameras: HashMap<EntityId, CameraRig>,
     lights: HashMap<EntityId, LightComponent>,
     rigid_bodies: HashMap<EntityId, RigidBody>,
+    cloths: HashMap<EntityId, ClothState>,
     colliders: HashMap<EntityId, Collider>,
     scripts: HashMap<EntityId, ScriptState>,
     pub materials: Vec<Material>,
     pub sky_color: Color,
     pub ambient_color: Color,
+    pub environment: EnvironmentProfile,
     tick: u64,
 }
 
@@ -157,11 +160,13 @@ impl Default for World {
             cameras: HashMap::new(),
             lights: HashMap::new(),
             rigid_bodies: HashMap::new(),
+            cloths: HashMap::new(),
             colliders: HashMap::new(),
             scripts: HashMap::new(),
             materials: Vec::new(),
             sky_color: Color::rgb(0.08, 0.12, 0.18),
             ambient_color: Color::rgb(0.035, 0.045, 0.055),
+            environment: EnvironmentProfile::rainy(),
             tick: 0,
         }
     }
@@ -206,6 +211,7 @@ impl World {
         self.cameras.remove(&id);
         self.lights.remove(&id);
         self.rigid_bodies.remove(&id);
+        self.cloths.remove(&id);
         self.colliders.remove(&id);
         self.scripts.remove(&id);
         true
@@ -266,6 +272,24 @@ impl World {
         true
     }
 
+    pub fn set_cloth(
+        &mut self,
+        id: EntityId,
+        definition: &ClothDefinition,
+    ) -> Result<bool, ClothError> {
+        if !self.is_alive(id) {
+            return Ok(false);
+        }
+        let Some(renderer) = self.mesh_renderers.get_mut(&id) else {
+            return Ok(false);
+        };
+        renderer.mesh.bake_transform();
+        let state = ClothState::new(&renderer.mesh.vertices, &renderer.mesh.indices, definition)?;
+        renderer.mesh.cloth = Some(definition.clone());
+        self.cloths.insert(id, state);
+        Ok(true)
+    }
+
     pub fn set_script(&mut self, id: EntityId, script: ScriptState) -> bool {
         if !self.is_alive(id) {
             return false;
@@ -294,7 +318,7 @@ impl World {
         self.slots.iter().filter(|slot| slot.alive).count()
     }
 
-    pub fn fixed_update(&mut self, dt: f32) {
+    pub fn fixed_update(&mut self, dt: f32) -> Result<(), ClothError> {
         let dt = dt.max(0.0);
         let ids: Vec<EntityId> = self.rigid_bodies.keys().copied().collect();
         for id in ids {
@@ -324,7 +348,37 @@ impl World {
                 script.ticks = script.ticks.saturating_add(1);
             }
         }
+        let mut collider_ids: Vec<_> = self.colliders.keys().copied().collect();
+        collider_ids.sort_unstable();
+        let mut cloth_colliders = vec![ClothColliderSnapshot::floor(-0.8)];
+        for id in collider_ids {
+            let position = self
+                .transforms
+                .get(&id)
+                .map(|transform| transform.position)
+                .unwrap_or(Vec3::ZERO);
+            match self.colliders[&id] {
+                Collider::Sphere { radius } => {
+                    cloth_colliders.push(ClothColliderSnapshot::sphere(position, radius));
+                }
+                Collider::Aabb { half_extents } => {
+                    cloth_colliders.push(ClothColliderSnapshot::aabb(
+                        position - half_extents,
+                        position + half_extents,
+                    ));
+                }
+            }
+        }
+        let mut cloth_ids: Vec<_> = self.cloths.keys().copied().collect();
+        cloth_ids.sort_unstable();
+        for id in cloth_ids {
+            let state = self.cloths.get_mut(&id).expect("cloth id came from map");
+            if let Some(renderer) = self.mesh_renderers.get_mut(&id) {
+                state.step(dt, &cloth_colliders, &mut renderer.mesh.vertices)?;
+            }
+        }
         self.tick = self.tick.saturating_add(1);
+        Ok(())
     }
 
     pub fn validate(&self) -> Vec<WorldIssue> {
@@ -383,7 +437,7 @@ impl World {
             }
             let mut mesh = renderer.mesh.clone();
             if let Some(transform) = self.transforms.get(entity) {
-                mesh.transform = transform.matrix();
+                mesh.transform = mesh.transform * transform.matrix();
             }
             mesh.prepass_eligible = renderer.prepass_eligible;
             mesh.reflection_proxy = renderer.reflection_proxy;
@@ -445,6 +499,109 @@ impl World {
             lights,
             sky_color: self.sky_color,
             ambient_color: self.ambient_color,
+            environment: self.environment,
+        }
+    }
+
+    pub fn into_render_scene(self) -> RenderScene {
+        let Self {
+            slots,
+            transforms,
+            mesh_renderers,
+            cameras,
+            lights: light_components,
+            materials,
+            sky_color,
+            ambient_color,
+            environment,
+            ..
+        } = self;
+        let is_alive = |id: EntityId| {
+            slots
+                .get(id.index as usize)
+                .is_some_and(|slot| slot.alive && slot.generation == id.generation)
+        };
+        let camera = cameras
+            .iter()
+            .find_map(|(id, rig)| (is_alive(*id) && rig.active).then_some(rig.camera))
+            .unwrap_or(Camera {
+                position: Vec3::new(0.0, 1.2, 4.0),
+                target: Vec3::ZERO,
+                up: Vec3::Y,
+                vertical_fov_radians: 55.0_f32.to_radians(),
+                near: 0.05,
+                far: 100.0,
+            });
+
+        let meshes = mesh_renderers
+            .into_iter()
+            .filter_map(|(entity, renderer)| {
+                if !is_alive(entity) || !renderer.visible {
+                    return None;
+                }
+                let mut mesh = renderer.mesh;
+                if let Some(transform) = transforms.get(&entity) {
+                    mesh.transform = mesh.transform * transform.matrix();
+                }
+                mesh.prepass_eligible = renderer.prepass_eligible;
+                mesh.reflection_proxy = renderer.reflection_proxy;
+                if mesh.is_floor_or_ground {
+                    mesh.shadow_class = ShadowCasterClass::None;
+                }
+                Some(mesh)
+            })
+            .collect();
+
+        let lights = light_components
+            .into_iter()
+            .filter_map(|(entity, component)| {
+                if !is_alive(entity) {
+                    return None;
+                }
+                let kind = match component.kind {
+                    LightKind::Directional { direction } => LightKind::Directional { direction },
+                    LightKind::Local { radius, .. } => LightKind::Local {
+                        position: transforms
+                            .get(&entity)
+                            .map(|transform| transform.position)
+                            .unwrap_or(Vec3::ZERO),
+                        radius,
+                    },
+                    LightKind::Spot {
+                        direction,
+                        radius,
+                        inner_angle_radians,
+                        outer_angle_radians,
+                        ..
+                    } => LightKind::Spot {
+                        position: transforms
+                            .get(&entity)
+                            .map(|transform| transform.position)
+                            .unwrap_or(Vec3::ZERO),
+                        direction,
+                        radius,
+                        inner_angle_radians,
+                        outer_angle_radians,
+                    },
+                };
+                Some(Light {
+                    name: "world_light",
+                    kind,
+                    color: component.color,
+                    intensity: component.intensity,
+                    casts_shadow: component.casts_shadow,
+                })
+            })
+            .collect();
+
+        RenderScene {
+            camera,
+            materials,
+            meshes,
+            lights,
+            sky_color,
+            ambient_color,
+            environment,
         }
     }
 
@@ -453,6 +610,7 @@ impl World {
             materials: scene.materials,
             sky_color: scene.sky_color,
             ambient_color: scene.ambient_color,
+            environment: scene.environment,
             ..Self::default()
         };
         let camera_entity = world.spawn(
@@ -466,7 +624,11 @@ impl World {
                 active: true,
             },
         );
-        for mesh in scene.meshes {
+        for mut mesh in scene.meshes {
+            let cloth = mesh.cloth.clone();
+            if cloth.is_some() {
+                mesh.bake_transform();
+            }
             let entity = world.spawn(mesh.name.clone(), Transform::IDENTITY);
             let prepass_eligible = mesh.prepass_eligible;
             let reflection_proxy = mesh.reflection_proxy;
@@ -479,6 +641,11 @@ impl World {
                     reflection_proxy,
                 },
             );
+            if let Some(definition) = cloth {
+                world
+                    .set_cloth(entity, &definition)
+                    .expect("scene cloth definition must be valid");
+            }
         }
         for light in scene.lights {
             let position = match light.kind {

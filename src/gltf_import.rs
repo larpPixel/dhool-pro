@@ -137,6 +137,7 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<(Vec<Material>, Vec<Mesh>),
                     let color = colors.get(index).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
                     Vertex {
                         position: Vec3::new(position[0], position[1], position[2]),
+                        previous_position: Vec3::new(position[0], position[1], position[2]),
                         normal: Vec3::new(normal[0], normal[1], normal[2]),
                         tangent: Vec3::new(tangent[0], tangent[1], tangent[2]),
                         tangent_sign: tangent[3],
@@ -177,6 +178,7 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<(Vec<Material>, Vec<Mesh>),
                 is_floor_or_ground: false,
                 prepass_eligible: false,
                 reflection_proxy: reflective,
+                cloth: None,
             });
         }
     }
@@ -352,6 +354,7 @@ where
                 is_floor_or_ground: false,
                 prepass_eligible: false,
                 reflection_proxy: false,
+                cloth: None,
             });
         }
     }
@@ -466,6 +469,7 @@ fn compact_indexed_geometry(
             remap[source_index_usize] = compact_index;
             vertices.push(Vertex {
                 position: Vec3::new(position[0], position[1], position[2]),
+                previous_position: Vec3::new(position[0], position[1], position[2]),
                 normal: Vec3::new(normal[0], normal[1], normal[2]),
                 tangent: Vec3::new(tangent[0], tangent[1], tangent[2]),
                 tangent_sign: tangent[3],
@@ -527,6 +531,7 @@ fn import_material(
         flags: MaterialFlags {
             receives_contact_shadows: true,
             uses_bent_normals: true,
+            alpha_tested: source.alpha_mode() == gltf::material::AlphaMode::Mask,
             ..MaterialFlags::default()
         },
         emission: Color::BLACK,
@@ -608,6 +613,7 @@ fn import_material_limited(
         flags: MaterialFlags {
             receives_contact_shadows: true,
             uses_bent_normals: true,
+            alpha_tested: source.alpha_mode() == gltf::material::AlphaMode::Mask,
             ..MaterialFlags::default()
         },
         emission: Color::BLACK,

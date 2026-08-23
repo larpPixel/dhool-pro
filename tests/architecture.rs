@@ -30,7 +30,6 @@ fn baseline_frame_graph_obeys_spec_constraints() {
         "local-light-z-fail-stencil-volumes",
         "stencil-restricted-local-lighting",
         "single-direction-depth-aware-velocity-compensation",
-        "half-resolution-camera-composite-effects",
         "smaa-t2x-motion-vector-resolve",
         "separate-linear-ui-overlay",
         "gamma-correct-scene-ui-presentation",
@@ -40,11 +39,10 @@ fn baseline_frame_graph_obeys_spec_constraints() {
     assert!(graph
         .resources()
         .any(|resource| resource.name == "2x-msaa-hardware-depth" && resource.sample_count == 2));
-    assert!(graph.resources().any(|resource| {
-        resource.name == "half-resolution-camera-composite-effects"
-            && resource.width_scale == 0.5
-            && resource.height_scale == 0.5
-    }));
+    assert!(!pass_names.contains(&"half-resolution-camera-composite-effects"));
+    assert!(!graph
+        .resources()
+        .any(|resource| resource.name == "half-resolution-camera-composite-effects"));
 }
 
 #[test]

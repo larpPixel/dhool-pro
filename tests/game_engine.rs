@@ -46,7 +46,7 @@ fn world_physics_uses_generational_entities_and_builds_render_scene() {
         },
     ));
 
-    world.fixed_update(1.0 / 60.0);
+    world.fixed_update(1.0 / 60.0).expect("fixed update");
     let y_after = world.transform(body).expect("body transform").position.y;
     assert!(y_after < 1.0);
     assert!(world.destroy(body));
@@ -58,6 +58,82 @@ fn world_physics_uses_generational_entities_and_builds_render_scene() {
         .iter()
         .filter(|mesh| mesh.is_floor_or_ground)
         .all(|mesh| mesh.shadow_class == ShadowCasterClass::None));
+}
+
+#[test]
+fn scene_cloth_uses_the_shared_fixed_step_and_preserves_pins() {
+    let scene = build_demo_scene();
+    let mut expected_cloth = scene
+        .meshes
+        .iter()
+        .find(|mesh| mesh.name == "cloth_validation_banner")
+        .expect("demo cloth")
+        .clone();
+    let definition = expected_cloth.cloth.clone().expect("cloth definition");
+    expected_cloth.bake_transform();
+    let pinned_positions: Vec<_> = definition
+        .pins
+        .iter()
+        .map(|pin| expected_cloth.vertices[pin.vertex].position)
+        .collect();
+    let free_vertex = expected_cloth.vertices.len() - 1;
+    let initial_free_position = expected_cloth.vertices[free_vertex].position;
+
+    let mut world = World::from_render_scene(scene);
+    for _ in 0..30 {
+        world.fixed_update(1.0 / 60.0).expect("cloth step");
+    }
+    let rendered = world.build_render_scene();
+    let cloth = rendered
+        .meshes
+        .iter()
+        .find(|mesh| mesh.name == "cloth_validation_banner")
+        .expect("simulated cloth");
+
+    for (pin, expected) in definition.pins.iter().zip(pinned_positions) {
+        assert_eq!(cloth.vertices[pin.vertex].position, expected);
+    }
+    assert_ne!(cloth.vertices[free_vertex].position, initial_free_position);
+    assert_ne!(
+        cloth.vertices[free_vertex].position,
+        cloth.vertices[free_vertex].previous_position
+    );
+    assert!(cloth.vertices.iter().all(|vertex| [
+        vertex.position.x,
+        vertex.position.y,
+        vertex.position.z,
+        vertex.previous_position.x,
+        vertex.previous_position.y,
+        vertex.previous_position.z,
+        vertex.normal.x,
+        vertex.normal.y,
+        vertex.normal.z,
+        vertex.tangent.x,
+        vertex.tangent.y,
+        vertex.tangent.z,
+    ]
+    .into_iter()
+    .all(f32::is_finite)));
+}
+
+#[test]
+fn world_round_trip_composes_existing_mesh_transforms() {
+    let scene = build_demo_scene();
+    let expected = scene
+        .meshes
+        .iter()
+        .find(|mesh| mesh.name == "prepassed_reflective_panel")
+        .expect("placed mesh")
+        .transform;
+    let rebuilt = World::from_render_scene(scene).build_render_scene();
+    let actual = rebuilt
+        .meshes
+        .iter()
+        .find(|mesh| mesh.name == "prepassed_reflective_panel")
+        .expect("rebuilt placed mesh")
+        .transform;
+
+    assert_eq!(actual, expected);
 }
 
 #[test]

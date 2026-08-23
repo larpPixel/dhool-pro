@@ -34,6 +34,18 @@ Kawase bloom, GT tone mapping, and a final SMAA T2x-style edge/persistence
 resolve. Materials use mipmapped base-color, tangent-space normal, and packed
 AO/roughness/metallic maps.
 
+Lighting and weather come from each scene's environment profile. The monsoon
+city keeps rain, wet surfaces, and its broad exposure range; Dust2 selects dry
+daylight, its Source 2 sky orientation, and a tighter exterior exposure range.
+The shared Burley diffuse path is energy-normalized and uses a restrained sky
+hemisphere fill, so bright plaster keeps detail without crushing shaded alleys.
+
+Scene meshes can opt into the shared fixed-step cloth component. The same
+deterministic solver drives the world/reference path and live GPU vertex uploads,
+including pin constraints, wind, floor/sphere/box collision, rebuilt tangent
+bases, motion vectors, and shadow-cache invalidation. The monsoon and Dust2
+scenes each include a tessellated cloth awning as a runtime validation fixture.
+
 ![Rainy monsoon city live GPU scene](demo-output/aaa-live.png)
 
 The asset bundle is checked in for deterministic offline runs. Refresh the
@@ -77,6 +89,13 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 DHOOL_GPU=AMD cargo run --release -- --live --frames 4
 DHOOL_GPU=NVIDIA cargo run --release -- --live --frames 4
+```
+
+Use a fixed camera and an overlay-free capture when comparing lighting changes:
+
+```sh
+DHOOL_GPU=AMD cargo run --release -- --live --map dust2 --static-camera \
+  --frames 40 --capture /tmp/dhool-dust2.png
 ```
 
 The raw analyses in `files/` directly inform the implementation: `vendor-agnostic.txt`

@@ -33,15 +33,21 @@ The script exports:
 
 `build_dust2_scene()` prefers the visual `de_dust2.glb` export, caps decoded
 runtime texture size for memory safety, filters Source 2 tool/clip meshes, adds
-a Dust2 skybox shell when the converted skybox PNG exists, and retains the
-physics GLB only as a compatibility fallback. It no longer silently falls back
-to CC0 placeholder boxes.
+the converted Dust2 panorama directly to live sky lighting, and retains the
+physics GLB only as a compatibility fallback. The importer fails if sky
+extraction or conversion does not produce a non-empty file. It no longer
+silently falls back to CC0 placeholder boxes.
 
 ## Roaming the map
 
 Run `cargo run --release -- --live --map dust2`. The Dust2 camera starts inside
 the imported map at player height. Hold right mouse to look, use `W`/`A`/`S`/`D`
 to move, `Q`/`E` to descend/ascend, and `Shift` to boost.
+
+Dust2 uses a dry-daylight environment profile: rain and wet-surface effects are
+disabled, while sky exposure/yaw and auto-exposure limits come from the scene.
+For a deterministic comparison capture, add `--static-camera --frames 40
+--capture /tmp/dhool-dust2.png`; capture mode omits the FPS overlay.
 
 ## Legacy CC0 placeholders
 

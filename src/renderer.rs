@@ -8,6 +8,9 @@ use crate::quality::QualityTier;
 use crate::scene::{LightKind, MaterialClass, RenderScene};
 use std::time::Instant;
 
+const INV_PI: f32 = std::f32::consts::FRAC_1_PI;
+const SKY_HEMISPHERE_SCALE: f32 = 0.24;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DebugView {
     Beauty,
@@ -270,6 +273,7 @@ struct ScreenVertex {
     y: f32,
     depth: f32,
     world: Vec3,
+    previous_screen: Vec2,
     normal: Vec3,
     tangent: Vec3,
     tangent_sign: f32,
@@ -527,6 +531,7 @@ impl CpuRenderer {
             y: 0.0,
             depth: 0.0,
             world: Vec3::ZERO,
+            previous_screen: Vec2::ZERO,
             normal: Vec3::Y,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -547,6 +552,18 @@ impl CpuRenderer {
             }
             let inv_w = 1.0 / clip.w;
             let ndc = Vec3::new(clip.x * inv_w, clip.y * inv_w, clip.z * inv_w);
+            let previous_world = model.mul_vec4(Vec4::new(
+                vertex.previous_position.x,
+                vertex.previous_position.y,
+                vertex.previous_position.z,
+                1.0,
+            ));
+            let previous_clip = vp.mul_vec4(previous_world);
+            let previous_inv_w = 1.0 / previous_clip.w.max(1.0e-5);
+            let previous_ndc = Vec2::new(
+                previous_clip.x * previous_inv_w,
+                previous_clip.y * previous_inv_w,
+            );
             let n4 = model.mul_vec4(Vec4::new(
                 vertex.normal.x,
                 vertex.normal.y,
@@ -564,6 +581,10 @@ impl CpuRenderer {
                 y: (1.0 - (ndc.y * 0.5 + 0.5)) * (self.config.height - 1) as f32,
                 depth: saturate(ndc.z),
                 world: world4.xyz(),
+                previous_screen: Vec2::new(
+                    (previous_ndc.x * 0.5 + 0.5) * (self.config.width - 1) as f32,
+                    (1.0 - (previous_ndc.y * 0.5 + 0.5)) * (self.config.height - 1) as f32,
+                ),
                 normal: n4.xyz().normalize_or_zero(),
                 tangent: t4.xyz().normalize_or_zero(),
                 tangent_sign: vertex.tangent_sign,
@@ -650,6 +671,13 @@ impl CpuRenderer {
                 let tangent_sign =
                     tri[0].tangent_sign * w0 + tri[1].tangent_sign * w1 + tri[2].tangent_sign * w2;
                 let world = tri[0].world * w0 + tri[1].world * w1 + tri[2].world * w2;
+                let previous_screen = tri[0].previous_screen * w0
+                    + tri[1].previous_screen * w1
+                    + tri[2].previous_screen * w2;
+                let velocity = Vec2::new(
+                    (px - previous_screen.x) / self.config.width as f32,
+                    (py - previous_screen.y) / self.config.height as f32,
+                );
                 let vertex_color = tri[0].color * w0 + tri[1].color * w1 + tri[2].color * w2;
                 let uv = tri[0].uv * w0 + tri[1].uv * w1 + tri[2].uv * w2;
                 let texture_color = material
@@ -712,7 +740,7 @@ impl CpuRenderer {
                     roughness: material.roughness * pbr.g,
                     specular: material.specular_intensity,
                     cavity: material.cavity * pbr.r,
-                    velocity: Vec2::ZERO,
+                    velocity,
                     texture_count: material.texture_sample_count,
                     glass: material.flags.glass,
                     emissive: material.flags.emissive,
@@ -893,8 +921,7 @@ impl CpuRenderer {
             }
             let material = &scene.materials[g.material_index];
             let view = (scene.camera.position - g.world).normalize_or_zero();
-            let mut diffuse_irradiance =
-                scene.ambient_color.to_vec3() * (0.6 + 0.4 * g.normal.y.max(0.0));
+            let mut diffuse_irradiance = indirect_diffuse_irradiance(scene, g.normal) * INV_PI;
             let mut specular = Vec3::ZERO;
             let ao = buffers.ao[idx];
 
@@ -1254,7 +1281,14 @@ fn burley_diffuse(normal: Vec3, view: Vec3, light: Vec3, roughness: f32) -> f32 
     let fd90 = 0.5 + 2.0 * ldoth * ldoth * roughness.max(0.04);
     let light_scatter = 1.0 + (fd90 - 1.0) * pow5(1.0 - ndotl);
     let view_scatter = 1.0 + (fd90 - 1.0) * pow5(1.0 - ndotv);
-    ndotl * light_scatter * view_scatter
+    ndotl * light_scatter * view_scatter * INV_PI
+}
+
+fn indirect_diffuse_irradiance(scene: &RenderScene, normal: Vec3) -> Vec3 {
+    let up = normal.y.max(0.0);
+    let ambient = scene.ambient_color.to_vec3() * (0.6 + 0.4 * up);
+    let sky = scene.sky_color.to_vec3() * (0.18 + up * 0.82) * SKY_HEMISPHERE_SCALE;
+    ambient + sky
 }
 
 fn specular_occlusion(ndotv: f32, ao: f32, roughness: f32) -> f32 {
@@ -1442,14 +1476,14 @@ fn trace_alley_proxy(scene: &RenderScene, origin: Vec3, ray: Vec3) -> Color {
 }
 
 fn proxy_direct_radiance(scene: &RenderScene, position: Vec3, normal: Vec3, albedo: Vec3) -> Vec3 {
-    let mut radiance = albedo * (scene.ambient_color.to_vec3() * (0.52 + normal.y.max(0.0) * 0.34));
+    let mut radiance = albedo * indirect_diffuse_irradiance(scene, normal) * INV_PI;
     for light in &scene.lights {
         match light.kind {
             LightKind::Directional { direction } => {
                 let light_direction = (-direction).normalize_or_zero();
                 radiance += albedo
                     * light.color.to_vec3()
-                    * (light.intensity * light_direction.dot(normal).max(0.0) * 0.55);
+                    * (light.intensity * light_direction.dot(normal).max(0.0) * 0.55 * INV_PI);
             }
             LightKind::Local {
                 position: light_position,
@@ -1464,7 +1498,11 @@ fn proxy_direct_radiance(scene: &RenderScene, position: Vec3, normal: Vec3, albe
                 let attenuation = (1.0 - distance_to_light / radius).powi(2);
                 radiance += albedo
                     * light.color.to_vec3()
-                    * (light.intensity * attenuation * light_direction.dot(normal).max(0.0) * 0.72);
+                    * (light.intensity
+                        * attenuation
+                        * light_direction.dot(normal).max(0.0)
+                        * 0.72
+                        * INV_PI);
             }
             LightKind::Spot {
                 position: light_position,
@@ -1495,7 +1533,8 @@ fn proxy_direct_radiance(scene: &RenderScene, position: Vec3, normal: Vec3, albe
                         * attenuation
                         * practical_fill
                         * light_direction.dot(normal).max(0.0)
-                        * 0.72);
+                        * 0.72
+                        * INV_PI);
             }
         }
     }

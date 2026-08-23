@@ -1,6 +1,7 @@
 use crate::asset::{
     MaterialDesc, MeshDesc, ShadowCasterClass, TextureDesc, TextureFormat, TextureRole,
 };
+use crate::cloth::{ClothDefinition, ClothPin, ClothSettings};
 use crate::gltf_import::{
     import_gltf, import_gltf_with_texture_limits_filter_budget_by_primitive, GltfImportBudget,
     GltfImportError, GltfPrimitiveInfo, GltfTextureLimits,
@@ -161,6 +162,7 @@ impl Material {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vertex {
     pub position: Vec3,
+    pub previous_position: Vec3,
     pub normal: Vec3,
     pub tangent: Vec3,
     pub tangent_sign: f32,
@@ -179,6 +181,7 @@ pub struct Mesh {
     pub is_floor_or_ground: bool,
     pub prepass_eligible: bool,
     pub reflection_proxy: bool,
+    pub cloth: Option<ClothDefinition>,
 }
 
 impl Mesh {
@@ -193,6 +196,43 @@ impl Mesh {
             long_thin_triangles: false,
             dense_alpha_cards: false,
         }
+    }
+
+    pub fn bake_transform(&mut self) {
+        if self.transform == Mat4::IDENTITY {
+            return;
+        }
+        for vertex in &mut self.vertices {
+            let position = self.transform.mul_vec4(Vec4::new(
+                vertex.position.x,
+                vertex.position.y,
+                vertex.position.z,
+                1.0,
+            ));
+            let previous = self.transform.mul_vec4(Vec4::new(
+                vertex.previous_position.x,
+                vertex.previous_position.y,
+                vertex.previous_position.z,
+                1.0,
+            ));
+            let normal = self.transform.mul_vec4(Vec4::new(
+                vertex.normal.x,
+                vertex.normal.y,
+                vertex.normal.z,
+                0.0,
+            ));
+            let tangent = self.transform.mul_vec4(Vec4::new(
+                vertex.tangent.x,
+                vertex.tangent.y,
+                vertex.tangent.z,
+                0.0,
+            ));
+            vertex.position = position.xyz();
+            vertex.previous_position = previous.xyz();
+            vertex.normal = normal.xyz().normalize_or_zero();
+            vertex.tangent = tangent.xyz().normalize_or_zero();
+        }
+        self.transform = Mat4::IDENTITY;
     }
 }
 
@@ -248,6 +288,59 @@ pub struct RenderScene {
     pub lights: Vec<Light>,
     pub sky_color: Color,
     pub ambient_color: Color,
+    pub environment: EnvironmentProfile,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExposureProfile {
+    pub min: f32,
+    pub max: f32,
+    pub compensation: f32,
+    pub white_balance_strength: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnvironmentProfile {
+    pub sky_exposure_ev: f32,
+    pub sky_yaw_radians: f32,
+    pub precipitation: f32,
+    pub surface_wetness: f32,
+    pub wind: f32,
+    pub exposure: ExposureProfile,
+}
+
+impl EnvironmentProfile {
+    pub const fn rainy() -> Self {
+        Self {
+            sky_exposure_ev: 0.0,
+            sky_yaw_radians: 0.0,
+            precipitation: 1.0,
+            surface_wetness: 1.0,
+            wind: 0.18,
+            exposure: ExposureProfile {
+                min: 0.35,
+                max: 3.5,
+                compensation: 0.0,
+                white_balance_strength: 0.65,
+            },
+        }
+    }
+
+    pub const fn dry_daylight(sky_exposure_ev: f32, sky_yaw_radians: f32) -> Self {
+        Self {
+            sky_exposure_ev,
+            sky_yaw_radians,
+            precipitation: 0.0,
+            surface_wetness: 0.0,
+            wind: 0.08,
+            exposure: ExposureProfile {
+                min: 0.35,
+                max: 3.0,
+                compensation: 0.0,
+                white_balance_strength: 0.20,
+            },
+        }
+    }
 }
 
 impl RenderScene {
@@ -260,7 +353,7 @@ impl RenderScene {
 }
 
 pub fn build_demo_scene() -> RenderScene {
-    let materials = vec![
+    let mut materials = vec![
         Material {
             name: "mat_concrete_floor".to_string(),
             class: MaterialClass::Concrete,
@@ -344,6 +437,22 @@ pub fn build_demo_scene() -> RenderScene {
         },
     ];
 
+    let cloth_material = materials.len();
+    let mut cloth_canvas = solid_material(
+        "mat_cloth_canvas",
+        SolidMaterialParams {
+            class: MaterialClass::Default,
+            base_color: Color::rgb(0.72, 0.16, 0.08),
+            roughness: 0.88,
+            metallic: 0.0,
+            specular_intensity: 0.10,
+            cavity: 0.94,
+            material_id: 104,
+        },
+    );
+    cloth_canvas.flags.responsive_aa = true;
+    materials.push(cloth_canvas);
+
     let ground = Mesh {
         name: "ground_floor_excluded_from_shadows".to_string(),
         vertices: quad_vertices(3.5, Vec3::Y, -0.8, Color::WHITE),
@@ -354,6 +463,7 @@ pub fn build_demo_scene() -> RenderScene {
         is_floor_or_ground: true,
         prepass_eligible: true,
         reflection_proxy: false,
+        cloth: None,
     };
 
     let gold_panel = Mesh {
@@ -366,6 +476,7 @@ pub fn build_demo_scene() -> RenderScene {
         is_floor_or_ground: false,
         prepass_eligible: true,
         reflection_proxy: true,
+        cloth: None,
     };
 
     let glass_panel = Mesh {
@@ -378,6 +489,7 @@ pub fn build_demo_scene() -> RenderScene {
         is_floor_or_ground: false,
         prepass_eligible: false,
         reflection_proxy: true,
+        cloth: None,
     };
 
     let neon = Mesh {
@@ -390,6 +502,7 @@ pub fn build_demo_scene() -> RenderScene {
         is_floor_or_ground: false,
         prepass_eligible: false,
         reflection_proxy: true,
+        cloth: None,
     };
 
     RenderScene {
@@ -402,7 +515,22 @@ pub fn build_demo_scene() -> RenderScene {
             far: 25.0,
         },
         materials,
-        meshes: vec![ground, gold_panel, glass_panel, neon],
+        meshes: vec![
+            ground,
+            gold_panel,
+            glass_panel,
+            neon,
+            hanging_cloth_grid(
+                "cloth_validation_banner",
+                cloth_material,
+                Mat4::translation(Vec3::new(0.0, 1.9, -0.45)),
+                HangingClothGrid {
+                    size: Vec2::new(1.6, 1.0),
+                    resolution: [12, 8],
+                    wind: Vec3::new(0.45, 0.0, 2.2),
+                },
+            ),
+        ],
         lights: vec![
             Light {
                 name: "sun_key",
@@ -426,6 +554,7 @@ pub fn build_demo_scene() -> RenderScene {
         ],
         sky_color: Color::rgb(0.08, 0.12, 0.18),
         ambient_color: Color::rgb(0.035, 0.045, 0.055),
+        environment: EnvironmentProfile::rainy(),
     }
 }
 
@@ -466,6 +595,7 @@ pub fn build_asset_showcase(path: impl AsRef<Path>) -> Result<RenderScene, GltfI
         is_floor_or_ground: false,
         prepass_eligible: true,
         reflection_proxy: false,
+        cloth: None,
     });
 
     let material_offset = scene.materials.len();
@@ -546,26 +676,55 @@ pub fn build_dust2_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImpo
         .join("maps")
         .join("de_dust2.glb");
     let force_physics = std::env::var_os(CS2_DUST2_PHYSICS_IMPORT_ENV).is_some();
-    if !force_physics
+    let mut scene = if !force_physics
         && (visual_path.is_file() || std::env::var_os(CS2_DUST2_VISUAL_IMPORT_ENV).is_some())
     {
-        return build_cs2_dust2_visual_scene(root, &visual_path);
-    }
+        build_cs2_dust2_visual_scene(root, &visual_path)?
+    } else {
+        let world_path = root
+            .join("generated")
+            .join("cs2")
+            .join("maps")
+            .join("de_dust2")
+            .join("world_physics_physics.glb");
+        if !world_path.is_file() {
+            return Err(GltfImportError::Gltf(format!(
+                "missing local CS2 Dust2 visual export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
+                visual_path.display()
+            )));
+        }
+        build_cs2_dust2_physics_scene(root, &world_path)?
+    };
+    add_dust2_cloth_fixture(&mut scene);
+    Ok(scene)
+}
 
-    let world_path = root
-        .join("generated")
-        .join("cs2")
-        .join("maps")
-        .join("de_dust2")
-        .join("world_physics_physics.glb");
-    if !world_path.is_file() {
-        return Err(GltfImportError::Gltf(format!(
-            "missing local CS2 Dust2 visual export at {}; run scripts/import_cs2_dust2.sh with SOURCE2VIEWER_CLI pointing at ValveResourceFormat's Source2Viewer-CLI",
-            visual_path.display()
-        )));
-    }
-
-    build_cs2_dust2_physics_scene(root, &world_path)
+fn add_dust2_cloth_fixture(scene: &mut RenderScene) {
+    let material_index = scene.materials.len();
+    let mut material = solid_material(
+        "dust2_cloth_canvas",
+        SolidMaterialParams {
+            class: MaterialClass::Default,
+            base_color: Color::rgb(0.16, 0.34, 0.30),
+            roughness: 0.90,
+            metallic: 0.0,
+            specular_intensity: 0.08,
+            cavity: 0.95,
+            material_id: 254,
+        },
+    );
+    material.flags.responsive_aa = true;
+    scene.materials.push(material);
+    scene.meshes.push(hanging_cloth_grid(
+        "dust2_cloth_validation_awning",
+        material_index,
+        Mat4::rotation_y(2.26) * Mat4::translation(Vec3::new(43.0, 5.25, -39.25)),
+        HangingClothGrid {
+            size: Vec2::new(3.2, 1.45),
+            resolution: [18, 10],
+            wind: Vec3::new(0.9, 0.0, 2.8),
+        },
+    ));
 }
 
 fn build_cs2_dust2_visual_scene(
@@ -621,6 +780,7 @@ fn build_cs2_dust2_visual_scene(
         lights,
         sky_color: CS2_DUST2_SOURCE_SKY_COLOR,
         ambient_color: cs2_dust2_source_ambient_color(),
+        environment: EnvironmentProfile::dry_daylight(0.765, 0.516),
     })
 }
 
@@ -662,6 +822,7 @@ fn build_cs2_dust2_physics_scene(
         lights: cs2_dust2_lights(),
         sky_color: CS2_DUST2_SOURCE_SKY_COLOR,
         ambient_color: cs2_dust2_source_ambient_color(),
+        environment: EnvironmentProfile::dry_daylight(0.765, 0.516),
     })
 }
 
@@ -1682,6 +1843,7 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         ],
         sky_color: Color::rgb(0.006, 0.014, 0.034),
         ambient_color: Color::rgb(0.024, 0.030, 0.046),
+        environment: EnvironmentProfile::rainy(),
     };
 
     scene.meshes.extend([
@@ -2602,6 +2764,18 @@ pub fn build_aaa_scene(root: impl AsRef<Path>) -> Result<RenderScene, GltfImport
         ],
     )?;
 
+    scene.materials[market_awning_material].flags.responsive_aa = true;
+    scene.meshes.push(hanging_cloth_grid(
+        "monsoon_cloth_validation_awning",
+        market_awning_material,
+        Mat4::translation(Vec3::new(-0.8, 4.7, -43.0)),
+        HangingClothGrid {
+            size: Vec2::new(3.4, 1.55),
+            resolution: [18, 10],
+            wind: Vec3::new(-0.7, 0.0, 3.2),
+        },
+    ));
+
     Ok(scene)
 }
 
@@ -2815,13 +2989,17 @@ fn plane_mesh(
 ) -> Mesh {
     let half_width = width * 0.5;
     let half_depth = depth * 0.5;
-    let vertex = |x, z, u, v| Vertex {
-        position: Vec3::new(x, 0.0, z),
-        normal: Vec3::Y,
-        tangent: Vec3::X,
-        tangent_sign: 1.0,
-        uv: Vec2::new(u, v),
-        color: Color::WHITE,
+    let vertex = |x, z, u, v| {
+        let position = Vec3::new(x, 0.0, z);
+        Vertex {
+            position,
+            previous_position: position,
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            tangent_sign: 1.0,
+            uv: Vec2::new(u, v),
+            color: Color::WHITE,
+        }
     };
     Mesh {
         name: name.to_string(),
@@ -2838,6 +3016,7 @@ fn plane_mesh(
         is_floor_or_ground: ground,
         prepass_eligible: false,
         reflection_proxy: true,
+        cloth: None,
     }
 }
 
@@ -2869,6 +3048,7 @@ fn puddle_mesh(
     let mut vertices = Vec::with_capacity(outline.len() + 1);
     vertices.push(Vertex {
         position: Vec3::ZERO,
+        previous_position: Vec3::ZERO,
         normal: Vec3::Y,
         tangent: Vec3::X,
         tangent_sign: 1.0,
@@ -2878,6 +3058,7 @@ fn puddle_mesh(
     for point in outline {
         vertices.push(Vertex {
             position: Vec3::new(point.x * width, 0.0, point.y * depth),
+            previous_position: Vec3::new(point.x * width, 0.0, point.y * depth),
             normal: Vec3::Y,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -2904,6 +3085,7 @@ fn puddle_mesh(
         is_floor_or_ground: true,
         prepass_eligible: false,
         reflection_proxy: false,
+        cloth: None,
     }
 }
 
@@ -2929,6 +3111,7 @@ fn wall_mesh(
         is_floor_or_ground: false,
         prepass_eligible: false,
         reflection_proxy: true,
+        cloth: None,
     }
 }
 
@@ -3318,6 +3501,7 @@ fn box_mesh(
         for (position, uv) in corners.into_iter().zip(uvs) {
             vertices.push(Vertex {
                 position,
+                previous_position: position,
                 normal,
                 tangent,
                 tangent_sign: 1.0,
@@ -3400,6 +3584,7 @@ fn box_mesh(
         is_floor_or_ground: false,
         prepass_eligible,
         reflection_proxy,
+        cloth: None,
     }
 }
 
@@ -3408,6 +3593,7 @@ fn quad_vertices(size: f32, normal: Vec3, y: f32, color: Color) -> Vec<Vertex> {
     vec![
         Vertex {
             position: Vec3::new(-s, y, -s),
+            previous_position: Vec3::new(-s, y, -s),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3416,6 +3602,7 @@ fn quad_vertices(size: f32, normal: Vec3, y: f32, color: Color) -> Vec<Vertex> {
         },
         Vertex {
             position: Vec3::new(s, y, -s),
+            previous_position: Vec3::new(s, y, -s),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3424,6 +3611,7 @@ fn quad_vertices(size: f32, normal: Vec3, y: f32, color: Color) -> Vec<Vertex> {
         },
         Vertex {
             position: Vec3::new(s, y, s),
+            previous_position: Vec3::new(s, y, s),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3432,6 +3620,7 @@ fn quad_vertices(size: f32, normal: Vec3, y: f32, color: Color) -> Vec<Vertex> {
         },
         Vertex {
             position: Vec3::new(-s, y, s),
+            previous_position: Vec3::new(-s, y, s),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3448,6 +3637,7 @@ fn upright_quad_vertices(width: f32, height: f32, color: Color) -> Vec<Vertex> {
     vec![
         Vertex {
             position: Vec3::new(-hw, -hh, 0.0),
+            previous_position: Vec3::new(-hw, -hh, 0.0),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3456,6 +3646,7 @@ fn upright_quad_vertices(width: f32, height: f32, color: Color) -> Vec<Vertex> {
         },
         Vertex {
             position: Vec3::new(hw, -hh, 0.0),
+            previous_position: Vec3::new(hw, -hh, 0.0),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3464,6 +3655,7 @@ fn upright_quad_vertices(width: f32, height: f32, color: Color) -> Vec<Vertex> {
         },
         Vertex {
             position: Vec3::new(hw, hh, 0.0),
+            previous_position: Vec3::new(hw, hh, 0.0),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3472,6 +3664,7 @@ fn upright_quad_vertices(width: f32, height: f32, color: Color) -> Vec<Vertex> {
         },
         Vertex {
             position: Vec3::new(-hw, hh, 0.0),
+            previous_position: Vec3::new(-hw, hh, 0.0),
             normal,
             tangent: Vec3::X,
             tangent_sign: 1.0,
@@ -3479,4 +3672,74 @@ fn upright_quad_vertices(width: f32, height: f32, color: Color) -> Vec<Vertex> {
             color,
         },
     ]
+}
+
+struct HangingClothGrid {
+    size: Vec2,
+    resolution: [usize; 2],
+    wind: Vec3,
+}
+
+fn hanging_cloth_grid(
+    name: &str,
+    material_index: usize,
+    transform: Mat4,
+    grid: HangingClothGrid,
+) -> Mesh {
+    let [columns, rows] = grid.resolution;
+    assert!(columns >= 2 && rows >= 2);
+    let mut vertices = Vec::with_capacity(columns * rows);
+    for row in 0..rows {
+        let v = row as f32 / (rows - 1) as f32;
+        for column in 0..columns {
+            let u = column as f32 / (columns - 1) as f32;
+            let position = Vec3::new((u - 0.5) * grid.size.x, -v * grid.size.y, 0.0);
+            vertices.push(Vertex {
+                position,
+                previous_position: position,
+                normal: Vec3::Z,
+                tangent: Vec3::X,
+                tangent_sign: 1.0,
+                uv: Vec2::new(u, v),
+                color: Color::WHITE,
+            });
+        }
+    }
+
+    let mut indices = Vec::with_capacity((columns - 1) * (rows - 1) * 2);
+    for row in 0..rows - 1 {
+        for column in 0..columns - 1 {
+            let top_left = (row * columns + column) as u32;
+            let top_right = top_left + 1;
+            let bottom_left = top_left + columns as u32;
+            let bottom_right = bottom_left + 1;
+            indices.push([top_left, bottom_left, top_right]);
+            indices.push([top_right, bottom_left, bottom_right]);
+        }
+    }
+
+    Mesh {
+        name: name.to_string(),
+        vertices,
+        indices,
+        material_index,
+        transform,
+        shadow_class: ShadowCasterClass::Main,
+        is_floor_or_ground: false,
+        prepass_eligible: false,
+        reflection_proxy: false,
+        cloth: Some(ClothDefinition {
+            settings: ClothSettings {
+                wind: grid.wind,
+                damping: 0.992,
+                constraint_iterations: 7,
+                structural_stiffness: 0.92,
+                bending_stiffness: 0.34,
+                particle_radius: 0.015,
+                collision_friction: 0.25,
+                ..ClothSettings::default()
+            },
+            pins: (0..columns).map(ClothPin::at_initial).collect(),
+        }),
+    }
 }

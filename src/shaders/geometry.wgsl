@@ -22,6 +22,7 @@ struct Material {
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
+    @location(5) previous_position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) color: vec4<f32>,
@@ -58,7 +59,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.color = input.color;
     output.tangent = input.tangent;
     output.current_clip_position = output.clip_position;
-    output.previous_clip_position = camera.previous_view_projection * vec4<f32>(input.position, 1.0);
+    output.previous_clip_position = camera.previous_view_projection * vec4<f32>(input.previous_position, 1.0);
     return output;
 }
 

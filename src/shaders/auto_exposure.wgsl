@@ -4,6 +4,7 @@ struct Lights {
     ambient: vec4<f32>,
     sky: vec4<f32>,
     weather: vec4<f32>,
+    environment: vec4<f32>,
     local_position_radius: array<vec4<f32>, 6>,
     local_color_intensity: array<vec4<f32>, 6>,
     local_direction_outer: array<vec4<f32>, 6>,
@@ -74,21 +75,14 @@ fn cs_main(
             exposure_limits.y
         );
 
-        var illuminant = lights.ambient.rgb + lights.sky.rgb * 0.35;
-        illuminant += lights.directional_color_intensity.rgb
-            * lights.directional_color_intensity.w;
-        let local_count = u32(clamp(lights.directional_direction_count.w, 0.0, 6.0));
-        for (var index = 0u; index < local_count; index += 1u) {
-            illuminant += lights.local_color_intensity[index].rgb
-                * lights.local_color_intensity[index].w * 0.12;
-        }
+        let illuminant = lights.ambient.rgb + lights.sky.rgb * 0.35;
         let neutral = max(luminance(illuminant), 0.0001);
         let target_gains = clamp(
             vec3<f32>(neutral) / max(illuminant, vec3<f32>(0.0001)),
-            vec3<f32>(0.78),
-            vec3<f32>(1.28)
+            vec3<f32>(0.92),
+            vec3<f32>(1.08)
         );
-        let balance_strength = settings.limits_compensation_balance.w;
+        let balance_strength = min(settings.limits_compensation_balance.w, 0.65);
         let balanced_target = mix(vec3<f32>(1.0), target_gains, balance_strength);
         let previous = textureLoad(previous_calibration, vec2<i32>(0), 0);
         let has_history = previous.a > 0.0001;
