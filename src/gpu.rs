@@ -1302,6 +1302,11 @@ impl GpuRenderer {
             .iter()
             .map(|material| create_material(&device, &queue, &material_layout, material))
             .collect();
+        // Retire texture-upload staging memory before allocating the frame targets.
+        queue.submit([]);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| LiveError::Device(error.to_string()))?;
         let rain_streak_path = PathBuf::from(GENERATED_RAIN_STREAK_DETAIL);
         let rain_streak_detail = TextureImage::from_path(&rain_streak_path).map_err(|message| {
             LiveError::Scene(format!("{}: {message}", rain_streak_path.display()))
