@@ -1,0 +1,25 @@
+{
+  "source": "jR4dh3y/dhool-pro",
+  "source_url": "https://git.jr4.in/jR4dh3y/dhool-pro",
+  "destination": "larpPixel/dhool-pro",
+  "visibility": "public",
+  "default_branch": "main",
+  "original_git_refs": {
+    "source": "jR4dh3y/dhool-pro",
+    "name": "dhool-pro",
+    "private": false,
+    "source_present": true,
+    "branches": {
+      "refs/heads/main": "dbca71e9b96d731a131d494d6313defc4b82527c"
+    },
+    "tags": {
+      "refs/tags/v0.1.0-aa-camera": "1cf77718160784c024186da1b661a985cd0ce98d"
+    },
+    "other_refs": {},
+    "oversized_blobs": []
+  },
+  "github_archival_ref_mapping": {},
+  "discussion_mapping": {},
+  "recovered_refs": {},
+  "limitations": []
+}

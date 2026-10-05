@@ -1,0 +1,74 @@
+[
+  {
+    "id": 69,
+    "repo_id": 10,
+    "type": 1,
+    "config": null,
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  },
+  {
+    "id": 70,
+    "repo_id": 10,
+    "type": 2,
+    "config": "{\"EnableTimetracker\":true,\"AllowOnlyContributorsToTrackTime\":true,\"EnableDependencies\":true}",
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  },
+  {
+    "id": 71,
+    "repo_id": 10,
+    "type": 3,
+    "config": "{\"IgnoreWhitespaceConflicts\":false,\"AllowMerge\":true,\"AllowRebase\":true,\"AllowRebaseMerge\":true,\"AllowSquash\":true,\"AllowFastForwardOnly\":true,\"AllowManualMerge\":false,\"AutodetectManualMerge\":false,\"AllowRebaseUpdate\":true,\"DefaultDeleteBranchAfterMerge\":false,\"DefaultMergeStyle\":\"merge\",\"DefaultAllowMaintainerEdit\":true,\"DefaultTargetBranch\":\"\"}",
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  },
+  {
+    "id": 72,
+    "repo_id": 10,
+    "type": 4,
+    "config": null,
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  },
+  {
+    "id": 73,
+    "repo_id": 10,
+    "type": 5,
+    "config": null,
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  },
+  {
+    "id": 74,
+    "repo_id": 10,
+    "type": 8,
+    "config": "{\"ProjectsMode\":\"all\"}",
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  },
+  {
+    "id": 75,
+    "repo_id": 10,
+    "type": 9,
+    "config": null,
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  },
+  {
+    "id": 76,
+    "repo_id": 10,
+    "type": 10,
+    "config": null,
+    "created_unix": 1782120121,
+    "anonymous_access_mode": 0,
+    "everyone_access_mode": 0
+  }
+]
